@@ -2,6 +2,8 @@
 
 A minimal, fast terminal radio player. Browse and search thousands of internet radio stations from [radio-browser.info](https://www.radio-browser.info/), manage favourites, and play streams via `mpv`.
 
+![lxradio in action](docs/screenshot.png)
+
 ## Requirements
 
 - Python ≥ 3.10
