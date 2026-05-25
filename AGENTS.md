@@ -17,6 +17,7 @@ src/lxradio/
   favorites.py      — persistent favourites manager (Favorites)
   history.py        — persistent listening log manager (History, HistoryEntry)
   radio_browser.py  — API client (Station, search, top stations)
+  sleep_timer.py    — countdown timer with fade-out (SleepTimer)
 ```
 
 ## Development commands
@@ -84,6 +85,15 @@ All three (test, lint, typecheck) must pass. CI runs on Python 3.10–3.13 on Ub
 - **macOS**: mpv `--volume` at startup + IPC socket (`/tmp/lxradio-mpv-{pid}.sock`) for runtime changes. Volume is fully app-scoped.
 - **Linux**: mpv IPC is attempted first; if the IPC socket is unavailable, falls back to `pactl set-sink-volume`. This may still affect global PulseAudio sink when mpv is not running.
 - `_has_pactl()` caches its result in `_PACTL_AVAILABLE` to avoid ~150 filesystem syscalls/minute.
+
+### Sleep timer
+- Daemon thread counts down in 1s ticks; thread-safe `_remaining` and `_state` protected by `_lock`.
+- Last 60s: fades mpv volume proportionally every 2s via the Player's `set_volume`. Fade catches `OSError` on IPC calls.
+- `SleepTimer` accepts `get_volume`/`set_volume`/`on_expire` callables, keeping it decoupled from `Player`.
+- Cancelled automatically when starting a new station (`_play_selected`) or stopping playback (`_space`).
+- Presets cycle 15m → 30m → 60m → Off via `cycle_preset()`. Register `s`/`S` in `KeyDispatcher`.
+- Countdown displayed in the now-playing bar (not header) alongside station name and volume.
+- Session-only — no persistence between app restarts.
 
 ### Player process lifecycle
 - `Player.play()` catches `FileNotFoundError`, `PermissionError`, and other `OSError` subclasses from `subprocess.Popen`, passing a descriptive message to `_on_error` so the curses app does not crash.

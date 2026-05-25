@@ -31,6 +31,8 @@ lxradio
 | `/` | Search by name (prefix with `tag:` for tag search) |
 | `+` / `=` | Volume up |
 | `-` | Volume down |
+| `s` | Set sleep timer (15m → 30m → 60m → Off) |
+| `S` | Cancel sleep timer |
 | `q` | Quit |
 
 ## Search
