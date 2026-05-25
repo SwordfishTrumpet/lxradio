@@ -264,3 +264,31 @@ class TestRenderer:
         calls = renderer._scr.addstr.call_args_list
         texts = [c[0][2] for c in calls]
         assert any("No listening history yet" in t for t in texts)
+
+    def test_now_playing_shows_sleep_timer(self, renderer):
+        s = Station("1", "A", "http://a", "", [], "MP3", 0, 0)
+        state = self._make_state(
+            now_playing=s, song_title="Song", player_can_control_volume=True,
+            sleep_remaining=930.0, sleep_fading=False,
+        )
+        renderer._draw_now_playing(state, 24, 80)
+        calls = renderer._scr.addstr.call_args_list
+        texts = [c[0][2] for c in calls]
+        assert any("Sleep: 15:30" in t for t in texts)
+
+    def test_now_playing_shows_sleep_timer_when_not_playing(self, renderer):
+        state = self._make_state(
+            sleep_remaining=60.0, sleep_fading=True, status_msg=""
+        )
+        renderer._draw_now_playing(state, 24, 80)
+        calls = renderer._scr.addstr.call_args_list
+        texts = [c[0][2] for c in calls]
+        assert any("Sleep: 01:00" in t for t in texts)
+
+    def test_now_playing_no_sleep_when_inactive(self, renderer):
+        s = Station("1", "A", "http://a", "", [], "MP3", 0, 0)
+        state = self._make_state(now_playing=s, song_title="Song")
+        renderer._draw_now_playing(state, 24, 80)
+        calls = renderer._scr.addstr.call_args_list
+        texts = [c[0][2] for c in calls]
+        assert not any("Sleep:" in t for t in texts)

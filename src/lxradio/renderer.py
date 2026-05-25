@@ -289,11 +289,21 @@ class Renderer:
             title = state.song_title
             vol = state.player_volume
 
+            sleep_timer = ""
+            sleep_w = 0
+            if state.sleep_remaining > 0:
+                mins = int(state.sleep_remaining // 60)
+                secs = int(state.sleep_remaining % 60)
+                sleep_timer = f"  Sleep: {mins:02d}:{secs:02d}"
+                sleep_w = len(sleep_timer)
+
             left = f"  ▶  {name}"
             if title:
                 left += f"  —  {title}"
             vol_w = 16 if state.player_can_control_volume else 0
-            left = _trunc(left, w - vol_w)
+            avail = w - vol_w - sleep_w
+            left = _trunc(left, avail) + sleep_timer
+
             _safe_addstr(scr, y + 1, 0, left, curses.color_pair(C.TITLE_SONG) | curses.A_BOLD)
 
             if state.player_can_control_volume:
@@ -307,6 +317,10 @@ class Renderer:
             idle = "  ◉  Not playing"
             if state.status_msg:
                 idle += f"  —  {state.status_msg}"
+            if state.sleep_remaining > 0:
+                mins = int(state.sleep_remaining // 60)
+                secs = int(state.sleep_remaining % 60)
+                idle += f"  Sleep: {mins:02d}:{secs:02d}"
             _safe_addstr(scr, y + 1, 0, _trunc(idle, w), _dim())
 
     def _draw_footer(self, state: DrawState, h: int, w: int) -> None:
