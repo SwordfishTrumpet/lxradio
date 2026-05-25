@@ -24,9 +24,10 @@ lxradio
 | Key | Action |
 |-----|--------|
 | `↑` / `↓` or `j` / `k` | Navigate station list |
-| `Enter` | Play selected station |
-| `Space` | Stop playback |
-| `f` | Toggle favourite (browse & favourites view) |
+| `Enter` | Play selected / mute current station |
+| `Space` | Play/pause toggle |
+| `f` | Toggle favourite |
+| `m` | Mute / unmute |
 | `Tab` | Cycle through browse / favourites / history view |
 | `/` | Search by name (prefix with `tag:` for tag search) |
 | `+` / `=` | Volume up |
@@ -44,11 +45,11 @@ lxradio
 ## Features
 
 - **Thread-safe station loading** with fallback API hosts and DNS caching for fast browsing.
-- **Parallel search** — free-text search queries the `name` and `tag` endpoints concurrently via `ThreadPoolExecutor`, cutting worst-case latency from ~16s to ~8s.
+- **Parallel search** — free-text search queries the `name`, `tag`, and `country` endpoints concurrently via `ThreadPoolExecutor(max_workers=2)`, cutting worst-case latency from ~24s to ~16s.
 - **Paginated search** — free-text and tag searches load additional results as you scroll.
 - **Atomic favourites** writes with automatic backup on corruption.
 - **Listening history** — every station played and its song metadata is logged to `~/.config/lxradio/history.jsonl` ( capped at 1000 entries) with a dedicated History view accessible via `Tab`.
-- **App-scoped volume** via mpv (no global system volume changes).
+- **App-scoped volume** via mpv on macOS; on Linux it falls back to `pactl` when the IPC socket is unavailable.
 - **Graceful shutdown** on `SIGINT` / `SIGTERM` — mpv child processes are cleaned up.
 - **Heartbeat detection** — stale streams are detected automatically.
 - **Click deduplication** — rapid Enter presses on the same station are debounced to avoid duplicate API click-tracking requests.
@@ -59,8 +60,7 @@ lxradio
 
 - **Linux volume**: On Linux, mpv IPC is attempted first for volume control; if the IPC socket is unavailable, `pactl` is used as a fallback. This means volume changes may still affect the global PulseAudio sink when mpv is not running or the socket is missing.
 - **Multi-instance support**: The IPC socket path now includes the process ID (`/tmp/lxradio-mpv-{pid}.sock`), so multiple instances can run simultaneously without interfering with each other.
-- **Empty search**: Submitting an empty search query does not reset the station list to top stations; the previously displayed results remain.
-- **Merged search pagination**: Free-text search merges results from the `name` and `tag` API endpoints client-side. Because each endpoint ranks independently, paginated results may occasionally contain gaps or appear out of strict vote order.
+- **Merged search pagination**: Free-text search merges results from the `name`, `tag`, and `country` API endpoints client-side. Because each endpoint ranks independently, paginated results may occasionally contain gaps or appear out of strict vote order.
 
 ## Development
 
