@@ -170,6 +170,7 @@ class RadioApp:
 
     def _on_sleep_expire(self) -> None:
         self._player.stop()
+        self._now_playing = None
         self._song_title = ""
         self._status_msg = "Sleep timer finished"
         self._dirty = True

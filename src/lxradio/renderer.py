@@ -25,6 +25,7 @@ class C:
     QUALITY = 9
     COUNTRY = 10
     TITLE_SONG = 11
+    SLEEP_FADE = 12
 
 
 _SPINNER = "⣾⣽⣻⢿⡿⣟⣯⣷"
@@ -143,6 +144,7 @@ class Renderer:
         curses.init_pair(C.QUALITY, curses.COLOR_MAGENTA, bg)
         curses.init_pair(C.COUNTRY, curses.COLOR_YELLOW, bg)
         curses.init_pair(C.TITLE_SONG, curses.COLOR_GREEN, bg)
+        curses.init_pair(C.SLEEP_FADE, curses.COLOR_YELLOW, bg)
 
     def draw(self, state: DrawState) -> None:
         scr = self._scr
@@ -302,9 +304,17 @@ class Renderer:
                 left += f"  —  {title}"
             vol_w = 16 if state.player_can_control_volume else 0
             avail = w - vol_w - sleep_w
-            left = _trunc(left, avail) + sleep_timer
+            left = _trunc(left, avail)
 
             _safe_addstr(scr, y + 1, 0, left, curses.color_pair(C.TITLE_SONG) | curses.A_BOLD)
+
+            if sleep_timer:
+                timer_attr = (
+                    curses.color_pair(C.SLEEP_FADE) | curses.A_BOLD
+                    if state.sleep_fading
+                    else curses.color_pair(C.TITLE_SONG) | curses.A_BOLD
+                )
+                _safe_addstr(scr, y + 1, len(left), sleep_timer, timer_attr)
 
             if state.player_can_control_volume:
                 vol_str = (
@@ -317,11 +327,18 @@ class Renderer:
             idle = "  ◉  Not playing"
             if state.status_msg:
                 idle += f"  —  {state.status_msg}"
+            sleep_timer = ""
             if state.sleep_remaining > 0:
                 mins = int(state.sleep_remaining // 60)
                 secs = int(state.sleep_remaining % 60)
-                idle += f"  Sleep: {mins:02d}:{secs:02d}"
-            _safe_addstr(scr, y + 1, 0, _trunc(idle, w), _dim())
+                sleep_timer = f"  Sleep: {mins:02d}:{secs:02d}"
+            idle = _trunc(idle, w - len(sleep_timer))
+
+            _safe_addstr(scr, y + 1, 0, idle, _dim())
+
+            if sleep_timer:
+                timer_attr = _dim() | curses.A_BOLD if state.sleep_fading else _dim()
+                _safe_addstr(scr, y + 1, len(idle), sleep_timer, timer_attr)
 
     def _draw_footer(self, state: DrawState, h: int, w: int) -> None:
         _safe_addstr(

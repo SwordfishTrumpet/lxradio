@@ -692,3 +692,13 @@ class TestRadioAppLogic:
             assert app._sleep_timer.is_active()
             app._space()
         assert not app._sleep_timer.is_active()
+
+    def test_sleep_expire_clears_now_playing(self, app):
+        s = Station("1", "A", "http://a", "", [], "MP3", 0, 0)
+        app._now_playing = s
+        app._song_title = "Song"
+        app._status_msg = ""
+        app._on_sleep_expire()
+        assert app._now_playing is None
+        assert app._song_title == ""
+        assert app._status_msg == "Sleep timer finished"
