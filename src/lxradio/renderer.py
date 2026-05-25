@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import curses
 import logging
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import NamedTuple
 
 from .radio_browser import Station
@@ -59,9 +60,22 @@ def _vol_bar(vol: int, width: int = 10) -> str:
     return "█" * filled + "░" * (width - filled)
 
 
+def format_time_ago(timestamp: float) -> str:
+    """Return a compact relative time string."""
+    diff = time.time() - timestamp
+    if diff < 60:
+        return "now"
+    if diff < 3600:
+        return f"{int(diff // 60)}m"
+    if diff < 86400:
+        return f"{int(diff // 3600)}h"
+    return f"{int(diff // 86400)}d"
+
+
 class StationRowLayout(NamedTuple):
     name_w: int
     country_col: int
+    country_w: int
     tag_col: int
     tag_w: int
     quality_right_pad: int
@@ -70,12 +84,15 @@ class StationRowLayout(NamedTuple):
 
 def compute_layout(w: int) -> StationRowLayout:
     show_details = w >= 60
-    name_w = max(0, min(30, w - 30))
-    country_col = 36
-    tag_col = 42
+    gap = 2
+    name_col = 5
+    name_w = min(35, w // 3)
+    country_w = min(15, w // 6)
+    country_col = name_col + name_w + gap
+    tag_col = country_col + country_w + gap
     tag_w = max(0, w - tag_col - 14)
     quality_right_pad = 2
-    return StationRowLayout(name_w, country_col, tag_col, tag_w, quality_right_pad, show_details)
+    return StationRowLayout(name_w, country_col, country_w, tag_col, tag_w, quality_right_pad, show_details)
 
 
 @dataclass(frozen=True)
@@ -97,6 +114,8 @@ class DrawState:
     player_can_control_volume: bool
     footer_keys: str
     favorites: set[str]
+    is_history_view: bool = False
+    history_timestamps: list[float] = field(default_factory=list)
 
 
 class Renderer:
@@ -167,6 +186,7 @@ class Renderer:
         visible = list_bottom - list_top
 
         stations = state.stations
+        layout = compute_layout(w)
 
         for row_i in range(visible):
             si = state.scroll + row_i
@@ -178,15 +198,19 @@ class Renderer:
             selected = si == state.cursor
             playing = bool(state.now_playing and s.id == state.now_playing.id)
             is_fav = s.id in state.favorites
+            time_str = ""
+            if state.is_history_view and si < len(state.history_timestamps):
+                time_str = format_time_ago(state.history_timestamps[si])
 
-            self._draw_station_row(y, w, s, selected, playing, is_fav)
+            self._draw_station_row(y, w, layout, s, selected, playing, is_fav, time_str)
 
         if not stations and not state.loading:
-            msg = (
-                "No stations found."
-                if state.view_label == "STATIONS"
-                else "No favourites yet. Press F to add one."
-            )
+            if state.view_label == "STATIONS":
+                msg = "No stations found."
+            elif state.view_label == "HISTORY":
+                msg = "No listening history yet."
+            else:
+                msg = "No favourites yet. Press F to add one."
             cy = list_top + visible // 2
             _safe_addstr(self._scr, cy, max(0, w // 2 - len(msg) // 2), msg, _dim())
 
@@ -194,22 +218,26 @@ class Renderer:
         self,
         y: int,
         w: int,
+        layout: StationRowLayout,
         s: Station,
         selected: bool,
         playing: bool,
         is_fav: bool,
+        time_str: str = "",
     ) -> None:
         scr = self._scr
-        layout = compute_layout(w)
 
         if selected:
             _safe_addstr(scr, y, 0, " " * w, curses.color_pair(C.ACCENT) | curses.A_REVERSE)
 
         base_attr = curses.A_REVERSE if selected else 0
 
-        play_sym = "▶" if playing else " "
-        play_attr = (curses.color_pair(C.PLAYING) | curses.A_BOLD) if playing else _dim()
-        _safe_addstr(scr, y, 1, play_sym, play_attr | base_attr)
+        if time_str:
+            _safe_addstr(scr, y, 0, _trunc(time_str, 3).rjust(3), _dim() | base_attr)
+        else:
+            play_sym = "▶" if playing else " "
+            play_attr = (curses.color_pair(C.PLAYING) | curses.A_BOLD) if playing else _dim()
+            _safe_addstr(scr, y, 1, play_sym, play_attr | base_attr)
 
         fav_sym = "★" if is_fav else "☆"
         fav_attr = curses.color_pair(C.FAV_STAR) | curses.A_BOLD if is_fav else _dim()
@@ -227,7 +255,7 @@ class Renderer:
             scr,
             y,
             layout.country_col,
-            _trunc(s.country or "—", 4),
+            _trunc(s.country or "—", layout.country_w),
             curses.color_pair(C.COUNTRY) | base_attr,
         )
 

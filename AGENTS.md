@@ -10,100 +10,95 @@
 src/lxradio/
   __init__.py       — version info
   __main__.py       — CLI entry point (signal handlers)
-  app.py            — curses TUI state machine (RadioApp, < 250 lines)
+  app.py            — curses TUI state machine (RadioApp)
   renderer.py       — pure curses drawing (Renderer, DrawState, StationRowLayout)
   key_dispatcher.py — registration-driven input handling (KeyDispatcher, KeyBinding)
   player.py         — mpv wrapper (Player)
   favorites.py      — persistent favourites manager (Favorites)
+  history.py        — persistent listening log manager (History, HistoryEntry)
   radio_browser.py  — API client (Station, search, top stations)
 ```
 
+## Development commands
+
+```bash
+python run.py               # RECOMMENDED for dev: adds src/ to PYTHONPATH, always picks up source changes
+uv run lxradio              # uses the installed copy in .venv — reinstall after source changes (see below)
+uv pip install -e .         # reinstall in editable mode so uv run lxradio picks up source changes
+
+uv run pytest tests/        # run tests
+uv run pytest tests/ -k NAME # run single test
+uv run ruff check src/ tests/  # lint
+uv run mypy src/              # type check
+```
+
+**Note:** `uv run lxradio` resolves the package from `.venv/site-packages/`, not from `src/`. After editing source files, run `uv pip install -e .` or use `python run.py` which adds `src/` to `PYTHONPATH`. Tests always use source via the `pythonpath = ["src"]` setting in `pyproject.toml`.
+
+**Note:** If `.env` contains `UV_NO_EDITABLE=1`, editable installs will silently fail. Remove that line or unset it in your shell.
+
+All three (test, lint, typecheck) must pass. CI runs on Python 3.10–3.13 on Ubuntu.
+
+## Testing patterns
+
+- **Tests mirror `src/` structure**: `tests/test_app.py` tests `src/lxradio/app.py`, etc.
+- **Curses is mocked**: Most tests mock `curses` module and `RadioApp._scr` (a `MagicMock` with `getmaxyx.return_value = (24, 80)`).
+- **Favorites and history files are monkeypatched**: Tests use `monkeypatch` to redirect `_FAVORITES_FILE`, `_HISTORY_FILE`, and `_CONFIG_DIR` to `tmp_path` to avoid touching real user config.
+- **Player tests mock `subprocess` and `shutil.which`**.
+- **Renderer tests mock `curses.window`** and test drawing helpers independently.
+
 ## Code conventions
 
-- Python ≥ 3.10
-- Type annotations on public APIs
-- `threading.Lock` for cross-thread state (see `app.py`, `player.py`)
+- Python ≥ 3.10, type annotations on public APIs
+- `threading.Lock` for cross-thread state (`app.py`, `player.py`)
 - Atomic file writes via temp file + `os.replace()` (see `favorites.py`)
-- Bare `except Exception: pass` is discouraged; catch specific exceptions and log  
-  **Current status**: 0 bare `except Exception` blocks remain. All previous violations in `app.py` (`_load_batch`), `player.py` (`stop`, `_mpv_ipc_set_volume`), and `radio_browser.py` (`_resolve_host`, `report_click`) have been fixed.
+- Catch specific exceptions; bare `except Exception: pass` is discouraged
+- Line length: 120 (ruff config)
 
-## Testing
-
-- **Runner**: pytest
-- **Coverage**: pytest-cov
-- **Lint**: ruff
-- **Type check**: mypy
-- Tests live in `tests/` and mirror the `src/` structure.
-- Use `uv run pytest tests/` to execute.
-
-## Key implementation details
+## Key architectural rules
 
 ### Thread safety
-- `RadioApp._lock` protects `_stations` and `_loading` between the main curses thread and background worker threads.
+- `RadioApp._lock` protects `_stations`, `_loading`, and `_status_msg` between main curses thread and background workers.
 - `Player._lock` protects `_proc` and `_current_title`.
-- **Callback discipline**: callbacks (e.g. `on_metadata`) are invoked *outside* the lock to avoid deadlock if the callback re-enters the object.
+- **Callbacks are invoked *outside* the lock** (e.g. `on_metadata`, `on_error`) to avoid deadlock if the callback re-enters the object.
 
-### DNS & API resilience
-- `_resolve_host()` caches the resolved API host for 5 minutes (`_DNS_CACHE_TTL`). The module-level cache is protected by `threading.Lock()` for explicit thread safety.
-- `_get()` retries across fallback hosts (`_FALLBACK_HOSTS`) on network failure.
-- **Click tracking** uses a dedicated `_click()` helper, not `_get()`, because `/url/{id}` returns a redirect rather than JSON.
-- **Click deduplication** in `RadioApp._play_selected()` skips firing a new `report_click` thread if the same station was already reported within the last 3 seconds (`_CLICK_DEBOUNCE_SECS`).
+### Renderer immutability
+- `RadioApp` builds an immutable `DrawState` dataclass on every frame and passes it to `Renderer.draw()`. The renderer never mutates app state. This makes drawing independently testable.
 
-### Volume
-- macOS: `mpv --volume` at startup + IPC socket (`/tmp/lxradio-mpv-{pid}.sock`) for runtime changes. Volume is fully app-scoped.
-- Linux: mpv IPC is attempted first for runtime volume changes; only if the IPC socket is unavailable does it fall back to `pactl set-sink-volume`. This minimizes global PulseAudio sink disruption, though the fallback still affects system volume when mpv is not actively connected.
-- `_has_pactl()` caches the result in a module-level `_PACTL_AVAILABLE: bool | None = None`. First call probes the filesystem; subsequent calls return the cached boolean, eliminating ~150 redundant filesystem syscalls per minute of use.
-- `set_volume(0)` now sets `_muted = True`, so the UI consistently renders `MUTED` at zero volume. `volume_up()` from a muted state automatically unmute-restores to a low volume rather than the pre-mute volume.
+### KeyDispatcher
+- Adding a new shortcut is one line: `d.register(KeyBinding(key, handler, description, when=...))`.
+- Footer help text is auto-generated from the registry. The `when` predicate controls conditional display (e.g. volume controls only shown when `can_control_volume()` is true).
 
 ### Favourites durability
 - Writes are atomic (`favorites.json.tmp` → `os.replace`).
 - Corrupted files are backed up to `favorites.json.bak` and logged.
-- Load errors are caught as specific exceptions (`json.JSONDecodeError`, `OSError`, `KeyError`), not bare `Exception`.
-- **Edge case** (resolved): valid JSON that is not a list (e.g. `null`, a dict, or a string) is now caught by an explicit `isinstance(data, list)` check that raises `TypeError`, which the outer `except` block catches alongside `json.JSONDecodeError`, `OSError`, and `KeyError`. The corrupted file is backed up to `favorites.json.bak` and the app starts with an empty favourites list.
+- Valid JSON that is not a list (e.g. `null`, dict, string) raises `TypeError` and is treated as corrupted.
 
-### Logging
-- `logging.basicConfig()` is set up in `__main__.py:main()` at `WARNING` level so library log messages (e.g. corrupted favourites) are visible to users.
+### History durability
+- Entries are stored as JSONL (`history.jsonl`) for append-only efficiency; each line is a self-contained JSON object.
+- Cap at **1000 entries** — on load, oldest lines are trimmed if over limit.
+- Writes are atomic (`history.jsonl.tmp` → `os.replace`).
+- Corruption handling: a malformed **last line** is skipped with a warning; a malformed line in the middle or an entirely invalid file triggers a backup to `history.jsonl.bak` and a fresh start.
+- `HistoryEntry` is an immutable `@dataclass(frozen=True)` with a `to_station()` helper so the renderer can treat history rows identically to station rows.
 
-### Player process spawning
+### Volume control
+- **macOS**: mpv `--volume` at startup + IPC socket (`/tmp/lxradio-mpv-{pid}.sock`) for runtime changes. Volume is fully app-scoped.
+- **Linux**: mpv IPC is attempted first; if the IPC socket is unavailable, falls back to `pactl set-sink-volume`. This may still affect global PulseAudio sink when mpv is not running.
+- `_has_pactl()` caches its result in `_PACTL_AVAILABLE` to avoid ~150 filesystem syscalls/minute.
+
+### Player process lifecycle
 - `Player.play()` catches `FileNotFoundError`, `PermissionError`, and other `OSError` subclasses from `subprocess.Popen`, passing a descriptive message to `_on_error` so the curses app does not crash.
+- `Player.stop()` sets `_stop_requested = threading.Event()` before joining the metadata thread. `_read_output` checks the event inside its stdout loop and breaks promptly.
 
-### Renderer architecture
-- `Renderer` is instantiated once in `_main()` and receives a `curses.window` handle.
-- `RadioApp` builds an immutable `DrawState` dataclass on every frame and passes it to `Renderer.draw()`. The renderer never mutates app state.
-- `StationRowLayout` (a `NamedTuple`) replaces magic column constants. `compute_layout(w)` returns a single layout object that includes `show_details = False` on narrow terminals, eliminating the abrupt `if w < 60: return` guard clause.
-- Drawing helpers (`_trunc`, `_vol_bar`, `_safe_addstr`, `_dim`, `_SPINNER`) live in `renderer.py` and are independently testable with a mocked `scr`.
-
-### KeyDispatcher
-- `KeyDispatcher` maps key codes to handlers via a registry of `KeyBinding` objects.
-- Each binding stores: `key` (int or tuple), `handler` (`Callable[[RadioApp], bool | None]`), `description` (for footer generation), and an optional `when` predicate for conditional bindings (e.g. volume controls only shown when `can_control_volume()` is true).
-- The footer help text is generated dynamically from the registry, eliminating the previously hardcoded string.
-- Adding a new shortcut is one line of registration.
-
-### Player thread lifecycle
-- `Player.stop()` sets a `_stop_requested = threading.Event()` before joining the metadata thread. `_read_output` checks the event inside its `for line in proc.stdout:` loop and breaks promptly, ensuring threads terminate deterministically within milliseconds rather than waiting for the next stdout line.
-
-### DNS resilience
-- `_resolve_host()` caches both successes (5 min TTL) and failures (30 sec TTL). A `_cached_failure` flag distinguishes the two states. During a transient DNS outage, repeated calls fall back immediately instead of stalling on repeated `socket.getaddrinfo()` attempts.
+### DNS & API resilience
+- `_resolve_host()` caches both successes (5 min TTL) and failures (30 sec TTL). A `_cached_failure` flag distinguishes the two states.
+- `_get()` retries across fallback hosts (`_FALLBACK_HOSTS`) on network failure.
+- **Click tracking** uses a dedicated `_click()` helper (not `_get()`) because `/url/{id}` returns a redirect rather than JSON.
+- **Click deduplication**: `RadioApp._play_selected()` skips firing a new `report_click` thread if the same station was already reported within the last 3 seconds.
 
 ### Search performance
-- `search()` uses a module-level `ThreadPoolExecutor(max_workers=2)` to fire `search_by_name` and `search_by_tag` concurrently. Worst-case latency drops from the sum of the two round-trips to the slower of the two.
+- `search()` uses a module-level `ThreadPoolExecutor(max_workers=2)` to fire `search_by_name` and `search_by_tag` concurrently. Worst-case latency drops from ~16s to ~8s.
 
-### Tag handling
-- `Station.from_api()` now stores **all** tags (no truncation at parse time).
-- `tag_str(max_tags=4)` handles display truncation. Downstream logic can access the full tag list for filtering or future tag-cloud features.
+## Coverage quirks
 
-### Hardened `_safe_addstr`
-- Only suppresses `curses.error` when `x + len(s) > w` (the expected narrow-terminal case). All other curses errors are logged as `WARNING` with `y, x, w, s[:20]` so layout bugs surface during development.
-
-### Event loop testability
-- `_main()`'s loop body is extracted into `_tick(key: int) -> bool`. `_main` becomes a thin wrapper: `while not self._tick(stdscr.getch()): ...`
-- `_tick` is unit-tested with synthetic key inputs without needing a real terminal.
-
-### Graceful shutdown
-- `RadioApp.shutdown()` stops the player and clears pending loaders. `__main__.py` calls this public method instead of reaching into `app._player.stop()`.
-- `SIGINT`/`SIGTERM` handlers in `__main__.py` call `app.shutdown()` before exiting.
-
-## WCAG 2.2 AA considerations for TUI
-- Ensure text contrast: `C.DIM` uses `curses.A_DIM` for visible dimming.
-- Provide clear status messages for all user actions (add/remove favourite, errors, loading).
-- Support narrow terminals: `name_w` is clamped to `max(0, min(30, w - 30))` and `_safe_addstr` gracefully suppresses only the expected overflow.
+- `__main__.py` is omitted from coverage (`omit = ["*/__main__.py"]` in pyproject.toml).
+- Some Linux-only volume control paths are skipped on macOS (see `test_player.py`).

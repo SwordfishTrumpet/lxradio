@@ -109,6 +109,8 @@ class SleepTimer:
                         self._set_volume(target)
 
             if remaining <= 0:
+                if self._stop_event.is_set():
+                    return
                 with self._lock:
                     self._state = "expired"
                     self._remaining = 0.0

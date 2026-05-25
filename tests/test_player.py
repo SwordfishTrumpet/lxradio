@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from lxradio.player import Player
+from lxradio.radio_browser import Station
 
 
 class TestPlayer:
@@ -71,10 +72,13 @@ class TestPlayer:
         p = Player()
         assert not p.is_playing()
 
+    def _station(self):
+        return Station("s1", "Station One", "http://stream", "US", ["jazz"], "MP3", 128, 10)
+
     def test_play_checks_for_mpv(self):
         p = Player()
         with patch("shutil.which", return_value=None), patch.object(p, "_on_error") as mock_error:
-            result = p.play("http://stream")
+            result = p.play(self._station())
             mock_error.assert_called_once_with("mpv not found in PATH")
             assert result is False
 
@@ -85,7 +89,7 @@ class TestPlayer:
         with patch("shutil.which", return_value="/usr/bin/mpv"), patch(
             "subprocess.Popen", side_effect=FileNotFoundError
         ):
-            result = p.play("http://stream")
+            result = p.play(self._station())
         on_error.assert_called_once_with("mpv not found in PATH")
         assert result is False
 
@@ -96,7 +100,7 @@ class TestPlayer:
         with patch("shutil.which", return_value="/usr/bin/mpv"), patch(
             "subprocess.Popen", side_effect=PermissionError("Permission denied")
         ):
-            result = p.play("http://stream")
+            result = p.play(self._station())
         on_error.assert_called_once_with("Failed to start mpv: Permission denied")
         assert result is False
 
@@ -107,7 +111,7 @@ class TestPlayer:
         with patch("shutil.which", return_value="/usr/bin/mpv"), patch(
             "subprocess.Popen", side_effect=OSError("Too many open files")
         ):
-            result = p.play("http://stream")
+            result = p.play(self._station())
         on_error.assert_called_once_with("Failed to start mpv: Too many open files")
         assert result is False
 
@@ -127,7 +131,7 @@ class TestPlayer:
         with patch("shutil.which", return_value="/usr/bin/mpv"), patch(
             "subprocess.Popen", return_value=fake_proc
         ):
-            result = p.play("http://stream")
+            result = p.play(self._station())
         assert result is True
         assert p._ipc_socket == f"/tmp/lxradio-mpv-{os.getpid()}.sock"
         assert p._metadata_thread is not None
@@ -151,7 +155,7 @@ class TestPlayer:
         ):
             on_meta = MagicMock()
             p._on_metadata = on_meta
-            p.play("http://stream")
+            p.play(self._station())
             # Give reader a moment to start
             time.sleep(0.1)
             p.stop()
@@ -170,7 +174,7 @@ class TestPlayer:
         with patch("shutil.which", return_value="/usr/bin/mpv"), patch(
             "subprocess.Popen", return_value=fake_proc
         ):
-            p.play("http://stream")
+            p.play(self._station())
         # Simulate a thread that is still alive
         fake_thread = MagicMock()
         fake_thread.is_alive.return_value = True
@@ -191,7 +195,7 @@ class TestPlayer:
         with patch("shutil.which", return_value="/usr/bin/mpv"), patch(
             "subprocess.Popen", return_value=fake_proc
         ):
-            p.play("http://stream")
+            p.play(self._station())
         p.stop()
         fake_proc.kill.assert_called_once()
 
@@ -425,3 +429,41 @@ class TestPlayer:
         monkeypatch.setattr("lxradio.player._has_pactl", lambda: False)
         p._ipc_socket = None
         assert not p.can_control_volume()
+
+    def test_play_emits_history_on_start(self):
+        p = Player()
+        on_history = MagicMock()
+        p._on_history = on_history
+        fake_proc = MagicMock()
+        fake_proc.stdout = iter([])
+        with patch("shutil.which", return_value="/usr/bin/mpv"), patch(
+            "subprocess.Popen", return_value=fake_proc
+        ):
+            station = self._station()
+            result = p.play(station)
+        assert result is True
+        on_history.assert_called_once_with("s1", "")
+
+    def test_metadata_emits_history_with_title(self):
+        p = Player()
+        on_history = MagicMock()
+        p._on_history = on_history
+        stdout = io.StringIO("icy-title: Song Title\n")
+        fake_proc = MagicMock()
+        fake_proc.stdout = stdout
+        p._proc = fake_proc
+        p._current_station = self._station()
+        p._read_output()
+        assert p.current_title == "Song Title"
+        on_history.assert_called_once_with("s1", "Song Title")
+
+    def test_play_station_sets_current_station(self):
+        p = Player()
+        fake_proc = MagicMock()
+        fake_proc.stdout = iter([])
+        with patch("shutil.which", return_value="/usr/bin/mpv"), patch(
+            "subprocess.Popen", return_value=fake_proc
+        ):
+            station = self._station()
+            p.play(station)
+        assert p._current_station == station

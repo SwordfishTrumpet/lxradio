@@ -193,13 +193,15 @@ class TestSearchFunctions:
 
     @patch("lxradio.radio_browser.search_by_name")
     @patch("lxradio.radio_browser.search_by_tag")
-    def test_search_merges_and_dedupes(self, mock_tag, mock_name):
+    @patch("lxradio.radio_browser.search_by_country")
+    def test_search_merges_and_dedupes(self, mock_country, mock_tag, mock_name):
         s1 = Station("1", "A", "http://a", "", ["rock"], "MP3", 128, 10)
         s2 = Station("2", "B", "http://b", "", ["rock"], "MP3", 128, 5)
         s3 = Station("3", "C", "http://c", "", ["jazz"], "MP3", 128, 20)
         # s1 appears in both name and tag results
         mock_name.return_value = [s1, s2]
         mock_tag.return_value = [s3, s1]
+        mock_country.return_value = []
         result = search("rock", limit=10)
         ids = [s.id for s in result]
         assert ids == ["3", "1", "2"]
@@ -207,10 +209,12 @@ class TestSearchFunctions:
 
     @patch("lxradio.radio_browser.search_by_name")
     @patch("lxradio.radio_browser.search_by_tag")
-    def test_search_returns_all_merged(self, mock_tag, mock_name):
+    @patch("lxradio.radio_browser.search_by_country")
+    def test_search_returns_all_merged(self, mock_country, mock_tag, mock_name):
         stations = [Station(str(i), f"S{i}", f"http://{i}", "", [], "MP3", 128, i) for i in range(10)]
         mock_name.return_value = stations[:5]
         mock_tag.return_value = stations[5:]
+        mock_country.return_value = []
         result = search("q", limit=3)
         assert len(result) == 3
         ids = [s.id for s in result]
@@ -218,26 +222,32 @@ class TestSearchFunctions:
 
     @patch("lxradio.radio_browser.search_by_name")
     @patch("lxradio.radio_browser.search_by_tag")
-    def test_search_enforces_limit(self, mock_tag, mock_name):
+    @patch("lxradio.radio_browser.search_by_country")
+    def test_search_enforces_limit(self, mock_country, mock_tag, mock_name):
         stations = [Station(str(i), f"S{i}", f"http://{i}", "", [], "MP3", 128, i) for i in range(10)]
         mock_name.return_value = stations[:6]
         mock_tag.return_value = stations[6:]
+        mock_country.return_value = []
         result = search("q", limit=5)
         assert len(result) == 5
 
     @patch("lxradio.radio_browser.search_by_name")
     @patch("lxradio.radio_browser.search_by_tag")
-    def test_search_default_limit_100(self, mock_tag, mock_name):
+    @patch("lxradio.radio_browser.search_by_country")
+    def test_search_default_limit_100(self, mock_country, mock_tag, mock_name):
         search("q")
         mock_name.assert_called_once_with("q", limit=100, offset=0)
         mock_tag.assert_called_once_with("q", limit=100, offset=0)
+        mock_country.assert_called_once_with("q", limit=100, offset=0)
 
     @patch("lxradio.radio_browser.search_by_name")
     @patch("lxradio.radio_browser.search_by_tag")
-    def test_search_passes_offset(self, mock_tag, mock_name):
+    @patch("lxradio.radio_browser.search_by_country")
+    def test_search_passes_offset(self, mock_country, mock_tag, mock_name):
         search("q", limit=10, offset=20)
         mock_name.assert_called_once_with("q", limit=10, offset=20)
         mock_tag.assert_called_once_with("q", limit=10, offset=20)
+        mock_country.assert_called_once_with("q", limit=10, offset=20)
 
 
 class TestClick:

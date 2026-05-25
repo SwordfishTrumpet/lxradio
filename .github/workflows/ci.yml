@@ -30,6 +30,23 @@ jobs:
         with:
           files: ./coverage.xml
 
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+      - name: Build package
+        run: uv build
+      - name: Install from wheel
+        run: uv pip install dist/*.whl
+      - name: Verify import
+        run: python -c "import lxradio; from lxradio.history import History; from lxradio.app import View; assert hasattr(View, 'HISTORY'), 'HISTORY view missing'"
+
   lint:
     runs-on: ubuntu-latest
     steps:

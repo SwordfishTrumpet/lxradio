@@ -27,7 +27,7 @@ lxradio
 | `Enter` | Play selected station |
 | `Space` | Stop playback |
 | `f` | Toggle favourite (browse & favourites view) |
-| `Tab` | Switch between browse / favourites view |
+| `Tab` | Cycle through browse / favourites / history view |
 | `/` | Search by name (prefix with `tag:` for tag search) |
 | `+` / `=` | Volume up |
 | `-` | Volume down |
@@ -45,6 +45,7 @@ lxradio
 - **Parallel search** — free-text search queries the `name` and `tag` endpoints concurrently via `ThreadPoolExecutor`, cutting worst-case latency from ~16s to ~8s.
 - **Paginated search** — free-text and tag searches load additional results as you scroll.
 - **Atomic favourites** writes with automatic backup on corruption.
+- **Listening history** — every station played and its song metadata is logged to `~/.config/lxradio/history.jsonl` ( capped at 1000 entries) with a dedicated History view accessible via `Tab`.
 - **App-scoped volume** via mpv (no global system volume changes).
 - **Graceful shutdown** on `SIGINT` / `SIGTERM` — mpv child processes are cleaned up.
 - **Heartbeat detection** — stale streams are detected automatically.
@@ -66,14 +67,18 @@ No manual install step required — `uv run` handles the environment automatical
 ```bash
 git clone https://github.com/anomalyco/lxradio
 cd lxradio
+uv sync
+python run.py
+```
+
+If you prefer to use `uv run lxradio` while hacking on the code, reinstall after source changes:
+
+```bash
+uv pip install -e .
 uv run lxradio
 ```
 
-Or, if you prefer to skip `uv` entirely while hacking on the code:
-
-```bash
-python run.py
-```
+**Note:** `python run.py` is the recommended dev workflow — it adds `src/` to `PYTHONPATH` so source changes are picked up immediately with no reinstall step.
 
 ### Tests & linting
 

@@ -4,13 +4,12 @@ import logging
 import os
 import shutil
 from collections.abc import Iterator
-from pathlib import Path
 
+from . import _CONFIG_DIR
 from .radio_browser import Station
 
 logger = logging.getLogger(__name__)
 
-_CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "lxradio"
 _FAVORITES_FILE = _CONFIG_DIR / "favorites.json"
 
 

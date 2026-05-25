@@ -30,10 +30,15 @@ class TestRadioAppLogic:
     @pytest.fixture
     def app(self, tmp_path, monkeypatch):
         test_file = tmp_path / "favorites.json"
+        hist_file = tmp_path / "history.jsonl"
         monkeypatch.setattr("lxradio.favorites._FAVORITES_FILE", test_file)
         monkeypatch.setattr("lxradio.favorites._CONFIG_DIR", tmp_path)
+        monkeypatch.setattr("lxradio.history._HISTORY_FILE", hist_file)
+        monkeypatch.setattr("lxradio.history._CONFIG_DIR", tmp_path)
         if test_file.exists():
             test_file.unlink()
+        if hist_file.exists():
+            hist_file.unlink()
 
         with patch("lxradio.app.curses") as mock_curses:
             mock_curses.KEY_UP = curses.KEY_UP
@@ -52,6 +57,8 @@ class TestRadioAppLogic:
 
         if test_file.exists():
             test_file.unlink()
+        if hist_file.exists():
+            hist_file.unlink()
 
     def test_current_stations_browse(self, app):
         app._stations = [Station("1", "A", "http://a", "", [], "MP3", 0, 0)]
@@ -148,7 +155,7 @@ class TestRadioAppLogic:
         with patch.object(app._player, "play", return_value=True) as mock_play:
             result = app._handle_nav_key(10)
         assert result is False
-        mock_play.assert_called_once_with("http://b")
+        mock_play.assert_called_once_with(s2)
         assert app._now_playing == s2
 
     def test_enter_on_different_station_play_failure(self, app):
@@ -160,7 +167,7 @@ class TestRadioAppLogic:
         with patch.object(app._player, "play", return_value=False) as mock_play:
             result = app._handle_nav_key(10)
         assert result is False
-        mock_play.assert_called_once_with("http://b")
+        mock_play.assert_called_once_with(s2)
         assert app._now_playing == s1  # unchanged because play failed
 
     def test_nav_empty_list_no_crash(self, app):
@@ -386,16 +393,20 @@ class TestRadioAppLogic:
     def test_handle_search_key_empty_name(self, app):
         app._search_mode = True
         app._query = ""
-        app._handle_search_key(10)
+        app._scr.getmaxyx.return_value = (24, 80)
+        with patch.object(app, "_start_load") as mock_load:
+            app._handle_search_key(10)
         assert not app._search_mode
-        assert app._status_msg == "Empty search"
+        mock_load.assert_called_once()
 
     def test_handle_search_key_empty_name_whitespace(self, app):
         app._search_mode = True
         app._query = "   "
-        app._handle_search_key(10)
+        app._scr.getmaxyx.return_value = (24, 80)
+        with patch.object(app, "_start_load") as mock_load:
+            app._handle_search_key(10)
         assert not app._search_mode
-        assert app._status_msg == "Empty search"
+        mock_load.assert_called_once()
 
     def test_handle_search_key_empty_tag_whitespace(self, app):
         app._search_mode = True
@@ -599,3 +610,46 @@ class TestRadioAppLogic:
         assert app._tick(ord("m")) is False
         assert app._player.is_muted()
         assert app._status_msg == "Muted"
+
+    def test_tab_cycles_through_views(self, app):
+        app._view = View.BROWSE
+        app._handle_nav_key(ord("\t"))
+        assert app._view == View.FAVORITES
+        app._handle_nav_key(ord("\t"))
+        assert app._view == View.HISTORY
+        app._handle_nav_key(ord("\t"))
+        assert app._view == View.BROWSE
+
+    def test_history_view_shows_history_entries(self, app):
+        s = Station("1", "A", "http://a", "US", ["jazz"], "MP3", 128, 10)
+        app._history.add(s, song_title="Song A")
+        app._view = View.HISTORY
+        stations = app._current_stations()
+        assert len(stations) == 1
+        assert stations[0].id == "1"
+
+    def test_enter_in_history_plays_station(self, app):
+        s = Station("1", "A", "http://a", "US", ["jazz"], "MP3", 128, 10)
+        app._history.add(s, song_title="Song A")
+        app._view = View.HISTORY
+        app._cursor = 0
+        with patch.object(app._player, "play", return_value=True) as mock_play:
+            app._enter()
+        mock_play.assert_called_once()
+        played_station = mock_play.call_args[0][0]
+        assert played_station.id == "1"
+
+    def test_history_callback_adds_entry(self, app):
+        s = Station("1", "A", "http://a", "US", ["jazz"], "MP3", 128, 10)
+        app._station_cache["1"] = s
+        app._on_history("1", "Song A")
+        entries = app._history.all()
+        assert len(entries) == 1
+        assert entries[0].station_id == "1"
+        assert entries[0].song_title == "Song A"
+
+    def test_history_view_empty_message(self, app):
+        app._view = View.HISTORY
+        state = app._build_draw_state()
+        assert state.view_label == "HISTORY"
+        assert state.station_count == 0

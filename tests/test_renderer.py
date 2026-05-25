@@ -67,21 +67,22 @@ class TestStationRowLayout:
     def test_compute_layout_wide(self):
         layout = compute_layout(80)
         assert layout.show_details is True
-        assert layout.name_w == 30
-        assert layout.country_col == 36
-        assert layout.tag_col == 42
-        assert layout.tag_w == 80 - 42 - 14
+        assert layout.name_w == 26
+        assert layout.country_col == 33
+        assert layout.country_w == 13
+        assert layout.tag_col == 48
+        assert layout.tag_w == 80 - 48 - 14
         assert layout.quality_right_pad == 2
 
     def test_compute_layout_narrow(self):
         layout = compute_layout(50)
         assert layout.show_details is False
-        assert layout.name_w == 20
+        assert layout.name_w == 16
 
     def test_compute_layout_very_narrow(self):
         layout = compute_layout(20)
         assert layout.show_details is False
-        assert layout.name_w == 0
+        assert layout.name_w == 6
 
 
 class TestRenderer:
@@ -117,6 +118,8 @@ class TestRenderer:
             "player_can_control_volume": True,
             "footer_keys": "  ↑↓ navigate   Enter play/mute   F favourite   / search   Tab view   ←→ vol   m mute   q quit  ",
             "favorites": set(),
+            "is_history_view": False,
+            "history_timestamps": [],
         }
         defaults.update(kwargs)
         return DrawState(**defaults)
@@ -160,7 +163,8 @@ class TestRenderer:
 
     def test_draw_station_row_selected_background(self, renderer):
         s = Station("1", "A", "http://a", "US", ["jazz"], "MP3", 128, 10)
-        renderer._draw_station_row(2, 80, s, True, False, False)
+        layout = compute_layout(80)
+        renderer._draw_station_row(2, 80, layout, s, True, False, False)
         calls = renderer._scr.addstr.call_args_list
         first_call = calls[0]
         assert first_call[0][2] == " " * 80
@@ -217,9 +221,10 @@ class TestRenderer:
 
     def test_draw_station_row_name_w_non_negative(self, renderer):
         s = Station("1", "VeryLongNameThatWouldBeTruncated", "http://a", "", [], "MP3", 0, 0)
-        renderer._draw_station_row(2, 20, s, False, False, False)
+        layout = compute_layout(20)
+        renderer._draw_station_row(2, 20, layout, s, False, False, False)
         all_texts = [str(c.args[2]) for c in renderer._scr.addstr.call_args_list if len(c.args) >= 3]
-        assert "…" in all_texts
+        assert any("…" in t for t in all_texts)
 
     def test_setup_colors(self, renderer):
         with patch("lxradio.renderer.curses") as mock_curses:
@@ -238,3 +243,24 @@ class TestRenderer:
             assert mock_curses.start_color.call_count >= 1
             assert mock_curses.use_default_colors.call_count >= 1
             assert mock_curses.init_pair.call_count >= 11
+
+    def test_history_row_shows_timestamp(self, renderer):
+        s = Station("1", "A", "http://a", "US", ["jazz"], "MP3", 128, 10)
+        layout = compute_layout(80)
+        renderer._draw_station_row(2, 80, layout, s, False, False, False, time_str="2m")
+        calls = renderer._scr.addstr.call_args_list
+        texts = [c[0][2] for c in calls]
+        assert any("2m" in t for t in texts)
+
+    def test_history_header_label(self, renderer):
+        state = self._make_state(view_label="HISTORY", station_count=1)
+        renderer._draw_header(state, 80)
+        call = renderer._scr.addstr.call_args
+        assert "HISTORY" in call[0][2]
+
+    def test_draw_station_list_empty_history(self, renderer):
+        state = self._make_state(stations=[], view_label="HISTORY", loading=False)
+        renderer._draw_station_list(state, 24, 80)
+        calls = renderer._scr.addstr.call_args_list
+        texts = [c[0][2] for c in calls]
+        assert any("No listening history yet" in t for t in texts)

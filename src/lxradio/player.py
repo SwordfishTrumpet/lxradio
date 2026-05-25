@@ -11,6 +11,8 @@ import threading
 import time
 from collections.abc import Callable
 
+from .radio_browser import Station
+
 _ICY_RE = re.compile(r"icy-title:\s*(.+)", re.IGNORECASE)
 _TITLE_RE = re.compile(r"Title:\s*(.+)", re.IGNORECASE)
 
@@ -39,12 +41,15 @@ class Player:
         self,
         on_metadata: Callable[[str], None] | None = None,
         on_error: Callable[[str], None] | None = None,
+        on_history: Callable[[str, str], None] | None = None,
     ):
         self._proc: subprocess.Popen | None = None
         self._on_metadata = on_metadata
         self._on_error = on_error
+        self._on_history = on_history
         self._metadata_thread: threading.Thread | None = None
         self._current_title: str = ""
+        self._current_station: Station | None = None
         self._volume: int = 80
         self._pre_mute_volume: int = 80
         self._muted: bool = False
@@ -54,7 +59,7 @@ class Player:
         self._ipc_socket: str | None = None
         self._stop_requested = threading.Event()
 
-    def play(self, url: str) -> bool:
+    def play(self, station: Station) -> bool:
         if shutil.which("mpv") is None:
             if self._on_error:
                 self._on_error("mpv not found in PATH")
@@ -72,7 +77,7 @@ class Player:
             "--msg-level=all=no,stream=info",
             "--display-tags=icy-title,title",
             f"--input-ipc-server={self._ipc_socket}",
-            url,
+            station.url,
         ]
         try:
             with self._lock:
@@ -85,12 +90,16 @@ class Player:
                     errors="replace",
                 )
                 self._current_title = ""
+                self._current_station = station
                 self._last_output_at = time.monotonic()
         except (FileNotFoundError, PermissionError, OSError) as exc:
             msg = "mpv not found in PATH" if isinstance(exc, FileNotFoundError) else f"Failed to start mpv: {exc}"
             if self._on_error:
                 self._on_error(msg)
             return False
+
+        if self._on_history:
+            self._on_history(station.id, "")
 
         self._metadata_thread = threading.Thread(
             target=self._read_output, daemon=True
@@ -109,6 +118,7 @@ class Player:
                     self._proc.kill()
             self._proc = None
             self._current_title = ""
+            self._current_station = None
             self._last_output_at = 0.0
             if self._ipc_socket:
                 with contextlib.suppress(OSError):
@@ -211,12 +221,19 @@ class Player:
                 m = _ICY_RE.search(line) or _TITLE_RE.search(line)
                 if m:
                     title = m.group(1).strip()
-                    notify = False
+                    notify_meta = False
+                    notify_history = False
+                    history_station_id = ""
                     with self._lock:
                         if title and title != self._current_title:
                             self._current_title = title
-                            notify = True
-                    if notify and self._on_metadata:
+                            notify_meta = True
+                            if self._current_station:
+                                notify_history = True
+                                history_station_id = self._current_station.id
+                    if notify_meta and self._on_metadata:
                         self._on_metadata(title)
+                    if notify_history and self._on_history:
+                        self._on_history(history_station_id, title)
         except (ValueError, OSError, UnicodeDecodeError):
             pass

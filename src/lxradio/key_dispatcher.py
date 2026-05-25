@@ -46,8 +46,18 @@ class KeyDispatcher:
         return "  " + "   ".join(parts) + "  "
 
 
-def make_default_dispatcher() -> KeyDispatcher:
+def _cycle_view(app: RadioApp) -> None:
     from .app import View  # lazy import to avoid circular dependency
+    current = app._view
+    if current == View.BROWSE:
+        app._switch_view(View.FAVORITES)
+    elif current == View.FAVORITES:
+        app._switch_view(View.HISTORY)
+    else:
+        app._switch_view(View.BROWSE)
+
+
+def make_default_dispatcher() -> KeyDispatcher:
     d = KeyDispatcher()
     d.register(KeyBinding((ord("q"), ord("Q")), lambda app: True, "q quit"))
     d.register(KeyBinding((curses.KEY_UP, ord("k")), lambda app: app._nav_up(), "↑↓ navigate"))
@@ -57,7 +67,7 @@ def make_default_dispatcher() -> KeyDispatcher:
     d.register(KeyBinding((curses.KEY_RESIZE,), lambda app: app._on_resize(), ""))
     d.register(KeyBinding((curses.KEY_ENTER, 10, 13), lambda app: app._enter(), "Enter play/mute"))
     d.register(KeyBinding((ord("f"), ord("F")), lambda app: app._toggle_favorite(), "F favourite"))
-    d.register(KeyBinding((ord("\t"),), lambda app: app._switch_view(View.FAVORITES if app._view == View.BROWSE else View.BROWSE), "Tab view"))
+    d.register(KeyBinding((ord("\t"),), _cycle_view, "Tab view"))
     d.register(KeyBinding((ord("/"),), lambda app: app._start_search(), "/ search"))
     d.register(KeyBinding((ord("+"), ord("="), curses.KEY_RIGHT), lambda app: app._player.volume_up(), "←→ vol", when=lambda app: app._player.can_control_volume()))
     d.register(KeyBinding((ord("-"), curses.KEY_LEFT), lambda app: app._player.volume_down(), "", when=lambda app: app._player.can_control_volume()))

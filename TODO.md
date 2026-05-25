@@ -1,194 +1,339 @@
-# TODO.md — lxradio Roadmap to All-A Rating
+# TODO: Persistent Listening History with Song Timeline
 
-_Target: bring every architectural aspect to an A rating._
+## Overview
+Add a third view (History) that logs every station played and the song metadata received, allowing users to browse their listening session, see timestamps, and jump back to previously played stations.
 
-Current baseline (post-audit): Modularity B+, Thread safety A, Error handling B+, Testability B, Type safety A, Performance B, Maintainability B.
+## Architecture
 
----
+```
+src/lxradio/
+  history.py        — NEW: listening log manager (JSONL persistence)
+  player.py         — MOD: emit history events alongside metadata
+  app.py            — MOD: add HISTORY view, handlers, state
+  renderer.py       — MOD: draw history entries in station list
+  key_dispatcher.py — MOD: register 'h' keybinding for history view
+  radio_browser.py  — NO CHANGE
+  favorites.py      — NO CHANGE
 
-## 1. Modularity → A
-
-### 1.1 Extract `Renderer` from `RadioApp`
-**File**: `src/lxradio/app.py` (506 lines → target < 250)
-**Problem**: `RadioApp` is a god class that mixes state management, input handling, pagination, and ~200 lines of curses drawing. This makes the drawing code impossible to test without instantiating the entire app, and any visual change requires touching the same file as business logic.
-**Plan**:
-1. Create `src/lxradio/renderer.py` with a `Renderer` class.
-2. `Renderer` owns `_setup_colors`, `_draw`, `_draw_header`, `_draw_search_bar`, `_draw_station_list`, `_draw_station_row`, `_draw_now_playing`, `_draw_footer`.
-3. `Renderer` receives a `curses.window` handle and a read-only view model (e.g., a `DrawState` dataclass or typed dict) from `RadioApp`. It never mutates state.
-4. `_safe_addstr`, `_trunc`, `_vol_bar`, `_dim`, `_SPINNER` move to `renderer.py` or a `drawing.py` module.
-5. `RadioApp` delegates: `self._renderer.draw(self._build_draw_state())`.
-6. **Result**: `app.py` contains only event loop, input handling, state transitions, and loader orchestration. `renderer.py` is pure drawing and testable with a mocked `scr`.
-
-### 1.2 Extract `KeyDispatcher`
-**Problem**: `_handle_nav_key` is a 70-line `if/elif` chain with mixed concerns (navigation, playback, view switching, volume, favourites, search entry). Adding a new keybinding means editing this chain and risking off-by-one errors in the `elif` logic.
-**Plan**:
-1. Create a `KeyBinding` dataclass: `key: int | tuple[int, ...]`, `handler: Callable[[RadioApp], bool | None]`, `description: str`.
-2. Register bindings in a `KeyDispatcher` that maps key codes to handlers.
-3. Handlers are small functions or methods on `RadioApp` that return `True` for quit, `False`/`None` for continue.
-4. The footer help text is generated from the dispatcher registry, eliminating the hardcoded footer string.
-5. **Result**: Adding a key is one line of registration. The dispatcher is independently testable.
+tests/
+  test_history.py   — NEW: atomic writes, corruption recovery, cap enforcement
+  test_app.py     — MOD: history view switching, history-based playback
+  test_renderer.py — MOD: history row rendering (or reuse station row)
+```
 
 ---
 
-## 2. Thread safety → A (maintain)
+## Phase 1: Core History Module
 
-### 2.1 Fix `_load_batch` worker writing `_status_msg` outside the lock
-**File**: `src/lxradio/app.py:463-465`
-**Problem**: The worker thread sets `self._status_msg = f"Error: {e}"` without acquiring `_lock`. The main thread reads it during `_draw_now_playing()`. In CPython this is usually safe for string references, but it is a formal data race and may produce torn strings or stale reads on other implementations.
-**Plan**:
-1. Change the worker to set `_status_msg` inside the `with self._lock:` block at line 466, or use a `queue.Queue` for one-way status message delivery from worker to main thread.
-2. **Result**: Eliminates the only remaining unsynchronized cross-thread write in the codebase.
+### 1.1 Create `src/lxradio/history.py`
+**Goal:** Self-contained, testable history manager mirroring `favorites.py` patterns.
 
----
+**Requirements:**
+- Store entries as JSONL (`~/.config/lxradio/history.jsonl`) for append-only efficiency
+- Each entry: `{timestamp, station_id, station_name, url, country, tags, codec, bitrate, votes, favicon, song_title}`
+- Cap at **1000 entries** — on load, trim oldest if over limit
+- Atomic writes: write to `.tmp`, `os.replace`
+- Corruption handling: if last line is malformed, skip it and log warning (JSONL means one bad line doesn't destroy the file)
+- Public API:
+  - `add(station: Station, song_title: str = "") -> None`
+  - `all() -> list[HistoryEntry]` — newest first
+  - `get(station_id: str) -> HistoryEntry | None` — most recent for that station
+  - `clear() -> None`
 
-## 3. Error handling → A
+**Design decisions:**
+- Use `@dataclass(frozen=True)` for `HistoryEntry` (immutable, hashable)
+- JSONL instead of JSON array: append is O(1) vs. O(n) rewrite; trim on load is acceptable since 1000 lines is trivial
+- Follow `favorites.py` config directory pattern: `_CONFIG_DIR / "history.jsonl"`
 
-### 3.1 Harden `_safe_addstr` against silent bug masking
-**File**: `src/lxradio/app.py:47-49`
-**Problem**: `contextlib.suppress(curses.error)` eats *every* curses error, including negative coordinates, out-of-bounds writes, and null window references. These are programming bugs, not environmental conditions like narrow terminals.
-**Plan**:
-1. Change `_safe_addstr` to only suppress when the string is wider than the window (a known, expected condition), or when `x + len(s) > w`.
-2. For all other `curses.error` cases, log a `WARNING` with `y, x, w, s[:20]`.
-3. Alternatively, split into `_safe_addstr` (narrow-terminal safe) and `_debug_addstr` (no suppression, used in test builds).
-4. **Result**: Visual layout bugs surface immediately during development, while narrow terminals remain graceful.
+### 1.2 Tests for `history.py`
+**File:** `tests/test_history.py`
 
-### 3.2 Fix `Player.stop()` potential orphan thread
-**File**: `src/lxradio/player.py:89-106`
-**Problem**: If `stop()` is called while the metadata thread is alive but `join(timeout=1)` times out, `_metadata_thread` is set to `None` anyway. The daemon thread continues running, potentially holding a reference to the old `Popen` stdout pipe.
-**Plan**:
-1. Set a `_stop_requested = threading.Event()` flag.
-2. `_read_output` checks `_stop_requested.is_set()` inside the `for line in proc.stdout:` loop and breaks promptly.
-3. `stop()` sets the event, then joins, then clears it.
-4. **Result**: Threads terminate deterministically within milliseconds, not after the next stdout line arrives.
+**Cases:**
+- [x] `test_add_creates_file` — first entry writes to tmp then replaces
+- [x] `test_all_returns_newest_first` — append 3 entries, verify order
+- [x] `test_cap_trims_oldest` — add 1002 entries, verify only 1000 remain, oldest evicted
+- [x] `test_load_skips_malformed_last_line` — write valid + malformed line, verify load succeeds
+- [x] `test_get_returns_most_recent` — add same station twice with different songs, verify most recent returned
+- [x] `test_clear_empties_file` — add entries, clear, verify `all()` returns `[]`
+- [x] `test_corruption_backup` — if entire file is invalid JSON, backup to `.bak` and start fresh (same pattern as favorites)
+- [x] `test_thread_safety` — spawn 10 threads adding simultaneously, verify all entries present (no data loss)
 
-### 3.3 Cache negative DNS results briefly
-**File**: `src/lxradio/radio_browser.py:65-85`
-**Problem**: If `all.api.radio-browser.info` is unreachable, `_resolve_host()` repeats the failing `socket.getaddrinfo()` call every time. A transient DNS outage causes a multi-second stall on every API call.
-**Plan**:
-1. Cache the *failure* for a shorter TTL (e.g., 30 seconds) so repeated calls within an outage window immediately fall back to `_FALLBACK_HOSTS[0]`.
-2. Distinguish "cached success" from "cached failure" in the cache state.
-3. **Result**: Resilient to DNS outages without hammering the resolver.
+**Monkeypatch targets:** `_CONFIG_DIR`, `_HISTORY_FILE` to `tmp_path`
 
 ---
 
-## 4. Testability → A
+## Phase 2: Player Integration
 
-### 4.1 Replace inline code-copy race guard test
-**File**: `tests/test_app.py`
-**Problem**: `test_maybe_load_more_double_lock_race_guard` contains a copy-pasted reproduction of `_maybe_load_more`’s logic. If the real method is refactored, the test tests stale code and gives false confidence.
-**Plan**:
-1. Refactor `_maybe_load_more` so the race window is injectable: extract a `_should_trigger_load(stations_count, offset, cursor, loading, has_more)` pure function that returns `bool` and the offset to load.
-2. Test `_should_trigger_load` directly with synthetic inputs.
-3. Test `_maybe_load_more` as an integration test by mocking `threading.Lock` with a fake lock that flips `_loading` on `__exit__`.
-4. **Result**: No inline code duplication. The race guard is tested against the real method.
+### 2.1 Modify `src/lxradio/player.py`
+**Goal:** Emit a history event when a station starts playing and when song metadata changes.
 
-### 4.2 Add integration tests for the event loop
-**Problem**: `_main()`'s `while True` loop is entirely untested. A regression in the `quit_` logic or the `_dirty` flag clearing would only be caught manually.
-**Plan**:
-1. Extract the loop body into a `_tick(key: int) -> bool` method that returns `True` for quit.
-2. `_main` becomes a thin wrapper: `while not self._tick(stdscr.getch()): ...`
-3. Test `_tick` with synthetic key inputs: assert `_search_mode` transitions, `_start_load` is called, `True` is returned for `q`, etc.
-4. **Result**: The event dispatching logic has regression coverage without needing a real terminal.
+**Changes:**
+- Add `on_history: Callable[[str, str], None] | None` callback parameter to `__init__`
+  - Signature: `(station_id: str, song_title: str) -> None`
+  - Alternative: pass full `Station` object — but `Player` currently only receives `url`. We need to change `play()` signature.
 
----
+**Decision needed:** Should `play()` accept a `Station` instead of just `url`?
+- **Option A:** `play(station: Station) -> bool` — breaks existing interface, requires updating `app.py` call sites
+- **Option B:** Keep `play(url: str)` but add `play_station(station: Station) -> bool` — cleaner separation
+- **Option C:** `play(url: str, station_id: str = "", station_name: str = "")` — backward compatible
 
-## 5. Performance → A
+**Recommended: Option A** — `play(station: Station)` because the Player is inherently station-aware (metadata, history). This is a small breaking change in a small codebase.
 
-### 5.1 Parallelise `search()` name + tag queries
-**File**: `src/lxradio/radio_browser.py:138-154`
-**Problem**: `search()` calls `search_by_name` and `search_by_tag` sequentially. Each is an 8-second-timeout network round-trip. The worst-case latency is ~16 seconds.
-**Plan**:
-1. Use `concurrent.futures.ThreadPoolExecutor(max_workers=2)` to fire both requests concurrently.
-2. Gather results, dedupe, sort, slice.
-3. Reuse a module-level executor to avoid thread creation overhead.
-4. **Result**: Search latency drops to the slower of the two calls, not the sum.
+**Implementation:**
+- Change `play(self, url: str)` → `play(self, station: Station)`
+- Store `_current_station: Station | None = None`
+- When metadata arrives (`_read_output`), call:
+  ```python
+  if self._on_history and self._current_station:
+      self._on_history(self._current_station.id, title)
+  ```
+- Also call `on_history` when `play()` succeeds (with empty `song_title` to log "started playing")
 
-### 5.2 Cache `_has_pactl()` result
-**File**: `src/lxradio/player.py:20-21`
-**Problem**: `shutil.which("pactl")` does filesystem `stat` calls on every `can_control_volume()` invocation, which happens on every redraw (~5 times/second).
-**Plan**:
-1. Cache the result in a module-level `_PACTL_AVAILABLE: bool | None = None`.
-2. First call probes the filesystem; subsequent calls return the cached boolean.
-3. Invalidate lazily (not needed for a CLI app lifecycle).
-4. **Result**: Eliminates ~150 redundant filesystem syscalls per minute of use.
+### 2.2 Update `src/lxradio/app.py` — Player construction
+**Changes:**
+- `self._player = Player(on_metadata=..., on_error=..., on_history=self._on_history)`
 
-### 5.3 Move tag truncation from ingestion to display
-**File**: `src/lxradio/radio_browser.py:34`
-**Problem**: `Station.from_api()` truncates tags to 4 at parse time. If a station has 8 tags, downstream code (search, filtering, future tag cloud) never sees the other 4.
-**Plan**:
-1. Store all tags in `Station.tags`.
-2. `tag_str` already truncates for display. Extend it to accept an optional `max_tags` parameter defaulting to 4.
-3. Update `_draw_station_row` to use `s.tag_str` with the display limit.
-4. **Result**: Full tag data available for logic; display truncation stays where it belongs.
+### 2.3 Update `tests/test_player.py`
+**Cases:**
+- [x] `test_play_emits_history_on_start` — mock `on_history`, call `play(station)`, verify called with `(station.id, "")`
+- [x] `test_metadata_emits_history_with_title` — mock `on_history`, simulate metadata line, verify called with `(station.id, "Song Title")`
+- [x] `test_play_station_sets_current_station` — verify `Player._current_station` is set after play
 
 ---
 
-## 6. Maintainability → A
+## Phase 3: App Layer — New View & Navigation
 
-### 6.1 Replace magic column constants with named layout
-**File**: `src/lxradio/app.py:217-234`
-**Problem**: `country_col = 36`, `tag_col = 42`, `w - tag_col - 14`, `w - len(quality) - 2` are scattered magic numbers. A 2-column change to the name width requires editing 4 separate expressions.
-**Plan**:
-1. Define a `StationRowLayout` dataclass or `NamedTuple` with `name_w`, `country_col`, `tag_col`, `tag_w`, `quality_col`.
-2. Provide a `compute_layout(w: int) -> StationRowLayout` function.
-3. `_draw_station_row` uses the layout object exclusively.
-4. **Result**: One place to change the layout. The layout computation is independently testable.
+### 3.1 Extend `View` enum in `app.py`
+```python
+class View(Enum):
+    BROWSE = auto()
+    FAVORITES = auto()
+    HISTORY = auto()
+```
 
-### 6.2 Add public `shutdown()` to `RadioApp`
-**File**: `src/lxradio/app.py`, `src/lxradio/__main__.py`
-**Problem**: `__main__.py` reaches into `app._player.stop()` (private attribute access). This is a module boundary violation.
-**Plan**:
-1. Add `RadioApp.shutdown() -> None` that stops the player and clears any pending loaders.
-2. Update `__main__.py` to call `app.shutdown()`.
-3. **Result**: `RadioApp` encapsulates its own lifecycle. `__main__.py` only uses the public API.
+### 3.2 Add history state to `RadioApp.__init__`
+```python
+self._history = History()
+```
 
-### 6.3 Consolidate `_draw_station_row` early-return logic
-**File**: `src/lxradio/app.py:221-222`
-**Problem**: `if w < 60: return` is an abrupt early return in the middle of a 30-line method. It skips country, tags, and quality without making it obvious *why* 60 is the cutoff.
-**Plan**:
-1. Move the width check into `compute_layout()`: if `w < 60`, return a layout with `show_details = False`.
-2. `_draw_station_row` becomes:
-   ```python
-   layout = compute_layout(w)
-   if selected: ...
-   draw_name(layout)
-   if layout.show_details:
-       draw_country(layout)
-       draw_tags(layout)
-       draw_quality(layout)
-   ```
-3. **Result**: The cutoff is a property of the layout, not a hidden guard clause.
+### 3.3 Add `_on_history` callback
+```python
+def _on_history(self, station_id: str, song_title: str) -> None:
+    # Find station in current list or history
+    station = self._find_station(station_id)
+    if station:
+        self._history.add(station, song_title)
+```
+
+**Question:** What if the station isn't in `_stations` anymore (e.g., scrolled away)?
+- Store a `_station_cache: dict[str, Station]` that retains every station ever seen in the session. History entries include full station data, so the cache is only needed for the current session — `history.py` already stores full metadata.
+
+### 3.4 Add history view switching
+```python
+def _switch_view_history(self) -> None:
+    self._switch_view(View.HISTORY)
+```
+
+### 3.5 Modify `_current_stations()` to return history entries
+```python
+def _current_stations(self) -> list[Station]:
+    if self._view == View.FAVORITES:
+        return self._favorites.all()
+    if self._view == View.HISTORY:
+        return [entry.to_station() for entry in self._history.all()]
+    with self._lock:
+        return list(self._stations)
+```
+
+**Design note:** `HistoryEntry.to_station()` reconstructs a `Station` dataclass so the renderer can treat history rows the same as station rows. This keeps the renderer changes minimal.
+
+### 3.6 Modify `_play_selected()` to handle history view
+When playing from history, the entry already has full station data — no API call needed. This is actually a feature: instant replay from history.
+
+### 3.7 Modify `_enter()` for history view
+When `Enter` is pressed in history view:
+- If the selected entry's station is already playing → toggle mute (same behavior)
+- Else → play that station directly (no API call needed, full metadata in history entry)
+
+### 3.8 Add history-aware keybinding in `key_dispatcher.py`
+```python
+d.register(KeyBinding((ord("h"), ord("H")), lambda app: app._cycle_view(), "Tab view"))
+```
+
+Wait — current `Tab` cycles between Browse and Favourites. With 3 views, we need a cleaner cycle.
+
+**Decision:** Replace `_switch_view()` with `_cycle_view()` that rotates: BROWSE → FAVORITES → HISTORY → BROWSE.
+
+Or: Keep `Tab` for Browse↔Favourites, and `h`/`H` for History. This is more predictable for existing users.
+
+**Recommended: Cycle on Tab** — simpler mental model: "Tab cycles through all views."
+
+Update `key_dispatcher.py`:
+```python
+def _cycle_view(app: RadioApp) -> None:
+    current = app._view
+    if current == View.BROWSE:
+        app._switch_view(View.FAVORITES)
+    elif current == View.FAVORITES:
+        app._switch_view(View.HISTORY)
+    else:
+        app._switch_view(View.BROWSE)
+
+d.register(KeyBinding((ord("\t"),), _cycle_view, "Tab view"))
+```
+
+### 3.9 Tests for `app.py` changes
+**File:** `tests/test_app.py`
+
+**Cases:**
+- [x] `test_tab_cycles_through_views` — BROWSE → FAVORITES → HISTORY → BROWSE
+- [x] `test_history_view_shows_history_entries` — add history entry, switch to HISTORY, verify in draw state
+- [x] `test_enter_in_history_plays_station` — select history entry, press Enter, verify `Player.play()` called with correct Station
+- [x] `test_history_callback_adds_entry` — simulate `on_history`, verify `History.all()` contains entry
+- [x] `test_history_view_empty_message` — no history, switch to HISTORY, verify "No listening history yet." message
 
 ---
 
-## Coverage Targets
+## Phase 4: Renderer Changes
 
-| Module | Current | Target | Gap |
-|--------|---------|--------|-----|
-| `app.py` | 90% | 98% | `_main` loop, complex draw paths |
-| `player.py` | 99% | 100% | `_system_volume` Linux success path (CI on Linux) |
-| `radio_browser.py` | 100% | 100% | — |
-| `favorites.py` | 100% | 100% | — |
-| **TOTAL** | **94%** | **98%+** | |
+### 4.1 History entry display
+History entries are shown in the same station list area but with an extra timestamp column.
+
+**Decision:** How to display history?
+- Option A: Reuse station row exactly (name, country, tags, quality) — simple but loses the "history" context (when was it played?)
+- Option B: Add a timestamp column, drop some station detail
+- Option C: Show timestamp + station name + song title (compact)
+
+**Recommended: Option C for narrow terminals, Option B for wide**
+
+**Layout for history rows:**
+```
+▶ ★ Station Name    2m ago    Song Title — Quality
+```
+
+**Implementation in `renderer.py`:**
+- `DrawState` gets `is_history_view: bool` field
+- `_draw_station_row()` checks `is_history_view` and renders timestamp + song title instead of country/tags
+- Or: keep `_draw_station_row()` unchanged for history (shows station metadata), and add a subtle timestamp in dim text after the name
+
+**Simpler approach:** Keep station row identical, prepend a compact timestamp in the play symbol column:
+```
+2m ★ Station Name    Country    Tags    Quality
+```
+
+This requires minimal renderer changes. The "play symbol" becomes a "time ago" string when in history view.
+
+### 4.2 Add history header label
+```python
+view_label="HISTORY" if self._view == View.HISTORY else ...
+```
+
+### 4.3 Tests for renderer
+**Cases:**
+- [x] `test_history_row_shows_timestamp` — verify "2m" or "1h" appears in history row
+- [x] `test_history_header_label` — verify header says "HISTORY"
 
 ---
 
-## Completion Criteria
+## Phase 5: KeyDispatcher & Footer
 
-- [x] `RadioApp` < 250 lines; `Renderer` extracted and tested.
-- [x] `KeyDispatcher` implemented; keybindings are registration-driven.
-- [x] `_load_batch` worker sets `_status_msg` inside the lock.
-- [x] `_safe_addstr` distinguishes narrow-terminal suppression from bug logging.
-- [x] `Player.stop()` uses `_stop_requested` event for deterministic thread shutdown.
-- [x] DNS failure caching added to `_resolve_host()`.
-- [x] `test_maybe_load_more_double_lock_race_guard` removed or rewritten against real code.
-- [x] `_tick` extracted from `_main` and unit-tested.
-- [x] `search()` uses `ThreadPoolExecutor` for parallel name/tag queries.
-- [x] `_has_pactl()` caches its result.
-- [x] Tag truncation moved from `from_api` to `tag_str`.
-- [x] `StationRowLayout` replaces magic column numbers.
-- [x] `RadioApp.shutdown()` added; `__main__.py` uses it.
+### 5.1 Update footer text
+The `Tab view` description should still work — it already dynamically generates from the registry.
+
+### 5.2 Consider adding `H` shortcut
+Add `d.register(KeyBinding((ord("h"), ord("H")), _cycle_view, ""))` as an alternative to Tab? No — keep it simple. Tab is sufficient.
+
+### 5.3 Add `c` for clear history?
+Could be useful but out of scope for MVP. Add if user requests.
 
 ---
 
-*Target completion: next development cycle. Items are ordered by dependency — Renderer extraction should happen before KeyDispatcher, which should happen before `_tick` testing.*
+## Phase 6: Testing & Quality
+
+### 6.1 Run full test suite
+```bash
+uv run pytest tests/ -v
+```
+
+**Expected:** All existing tests pass + new tests pass.
+
+### 6.2 Run linting
+```bash
+uv run ruff check src/ tests/
+```
+
+**Expected:** No new warnings.
+
+### 6.3 Run type checking
+```bash
+uv run mypy src/
+```
+
+**Expected:** No type errors in new code.
+
+### 6.4 Manual test checklist
+- [ ] Start app, play a station, verify `~/.config/lxradio/history.jsonl` created
+- [ ] Switch to History view with `Tab`, see the entry
+- [ ] Play another station, switch back to History, see both entries newest-first
+- [ ] Press Enter on a history entry, station plays immediately (no API spinner)
+- [ ] Close and reopen app, History view still shows previous entries
+- [ ] Let 1001 stations play (or script it), verify oldest entry is evicted
+
+---
+
+## Phase 7: Documentation
+
+### 7.1 Update `README.md`
+- Add `Tab` cycles through BROWSE → FAVOURITES → HISTORY
+- Add `History view` to Features list
+- Mention `~/.config/lxradio/history.jsonl` for power users
+
+### 7.2 Update `AGENTS.md` (if needed)
+- Add `history.py` to Architecture tree
+- Document `History` class under "Persistent data" section (atomic writes, JSONL, cap)
+
+---
+
+## Open Questions / Decisions
+
+1. **Station cache for history entries:** Should `RadioApp` keep a `_station_cache: dict[str, Station]` of every station loaded in the session, so `HistoryEntry` always has full metadata even if the station isn't in the current list?
+    - **Answer: Yes** — simple `dict`, populated in `_load_batch()` and `_play_selected()`.
+
+2. **Timestamp format:** Human-readable relative ("2m ago", "1h ago") or absolute ("14:32")?
+    - **Answer: Relative** for terminal compactness. Use simple helper: `<60s` → "now", `<60min` → "{m}m", `<24h` → "{h}h", else "{d}d".
+
+3. **Song title in history row:** Should the currently playing song be shown in the history list, or just the station name?
+    - **Answer: Show both** — station name + most recent song title (from history entry). If no song title, show "—".
+
+4. **History entry deduplication:** If you replay the same station 5 times, do you see 5 entries or 1 with updated timestamp?
+    - **Answer: 5 entries** — history is a log, not a favourites list. Each play is a distinct event.
+
+5. **Should favourites be shown in history view?**
+    - **Answer: No** — history is a separate concept. The star indicator still works if the history station is also a favourite.
+
+---
+
+## Implementation Order
+
+1. **Create `history.py` + tests** — independent, no other changes needed
+2. **Update `player.py` + tests** — add `Station` parameter, history callback
+3. **Update `app.py` + tests** — integrate History, add view, handle playback from history
+4. **Update `renderer.py` + tests** — history row rendering with timestamp
+5. **Update `key_dispatcher.py`** — cycle through 3 views
+6. **Run full verification** — pytest, ruff, mypy, manual test
+7. **Update docs** — README, AGENTS.md
+
+---
+
+## Definition of Done
+
+- [x] `history.py` exists, tested, with 1000-entry cap and atomic JSONL writes
+- [x] `Player.play()` accepts `Station` and emits history events
+- [x] `RadioApp` has `HISTORY` view, accessible via `Tab`
+- [x] History entries show relative timestamp in renderer
+- [x] Pressing Enter on history entry plays station without API call
+- [x] All tests pass (pytest)
+- [x] Lint passes (ruff)
+- [x] Type check passes (mypy)
+- [x] README and AGENTS.md updated
+- [ ] Manual test completed

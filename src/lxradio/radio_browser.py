@@ -152,19 +152,36 @@ def _get_search_executor() -> concurrent.futures.ThreadPoolExecutor:
     return _search_executor
 
 
+def search_by_country(country: str, limit: int = 60, offset: int = 0) -> list[Station]:
+    data = _get(
+        "/stations/search",
+        {
+            "country": country,
+            "limit": limit,
+            "offset": offset,
+            "hidebroken": "true",
+            "order": "votes",
+            "reverse": "true",
+        },
+    )
+    return [Station.from_api(d) for d in data if d.get("url_resolved")]
+
+
 def search(query: str, limit: int = 100, offset: int = 0) -> list[Station]:
-    """Broad search across station names and tags."""
+    """Broad search across station names, tags, and countries."""
     executor = _get_search_executor()
     future_name = executor.submit(search_by_name, query, limit=limit, offset=offset)
     future_tag = executor.submit(search_by_tag, query, limit=limit, offset=offset)
+    future_country = executor.submit(search_by_country, query, limit=limit, offset=offset)
 
     name_results = future_name.result()
     tag_results = future_tag.result()
+    country_results = future_country.result()
 
     seen: set[str] = set()
     merged: list[Station] = []
 
-    for station in name_results + tag_results:
+    for station in name_results + tag_results + country_results:
         if station.id not in seen:
             seen.add(station.id)
             merged.append(station)
