@@ -11,14 +11,26 @@ A minimal, fast terminal radio player. Browse and search thousands of internet r
 
 ## Installation
 
+`lxradio` is not yet on PyPI. Install from source:
+
 ```bash
-pip install lxradio
+git clone https://github.com/SwordfishTrumpet/lxradio
+cd lxradio
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
 ```
 
 ## Usage
 
 ```bash
 lxradio
+```
+
+Or run directly without installing:
+
+```bash
+python run.py
 ```
 
 ## Keybindings
@@ -69,7 +81,7 @@ lxradio
 No manual install step required — `uv run` handles the environment automatically.
 
 ```bash
-git clone https://github.com/anomalyco/lxradio
+git clone https://github.com/SwordfishTrumpet/lxradio
 cd lxradio
 uv sync
 python run.py
