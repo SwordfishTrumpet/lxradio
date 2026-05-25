@@ -18,3 +18,7 @@ wheels/
 .ruff_cache/
 coverage.xml
 .coverage
+
+# Project-specific exclusions
+TODO.md
+AGENTS.md
