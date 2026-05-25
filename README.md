@@ -11,8 +11,6 @@ A minimal, fast terminal radio player. Browse and search thousands of internet r
 
 ## Installation
 
-`lxradio` is not yet on PyPI. Install from source:
-
 ```bash
 git clone https://github.com/SwordfishTrumpet/lxradio
 cd lxradio
