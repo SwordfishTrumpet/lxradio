@@ -72,5 +72,7 @@ def make_default_dispatcher() -> KeyDispatcher:
     d.register(KeyBinding((ord("+"), ord("="), curses.KEY_RIGHT), lambda app: app._player.volume_up(), "←→ vol", when=lambda app: app._player.can_control_volume()))
     d.register(KeyBinding((ord("-"), curses.KEY_LEFT), lambda app: app._player.volume_down(), "", when=lambda app: app._player.can_control_volume()))
     d.register(KeyBinding((ord("m"), ord("M")), lambda app: app._toggle_mute(), "m mute", when=lambda app: app._player.can_control_volume()))
+    d.register(KeyBinding((ord("s"),), lambda app: app._cycle_sleep_timer(), "s sleep", when=lambda app: app._player.can_control_volume()))
+    d.register(KeyBinding((ord("S"),), lambda app: app._cancel_sleep_timer(), "", when=lambda app: app._player.can_control_volume()))
     d.register(KeyBinding((ord(" "),), lambda app: app._space(), ""))
     return d
