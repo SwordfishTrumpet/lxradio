@@ -653,3 +653,42 @@ class TestRadioAppLogic:
         state = app._build_draw_state()
         assert state.view_label == "HISTORY"
         assert state.station_count == 0
+
+    def test_cycle_sleep_timer_sets_15m(self, app):
+        app._cycle_sleep_timer()
+        assert app._sleep_timer.is_active()
+        remaining = app._sleep_timer.remaining_seconds()
+        assert remaining <= 900
+        assert remaining > 0
+        app._sleep_timer.cancel()
+
+    def test_cycle_sleep_timer_cancels_on_off(self, app):
+        app._cycle_sleep_timer()
+        app._cycle_sleep_timer()
+        app._cycle_sleep_timer()
+        app._cycle_sleep_timer()
+        assert not app._sleep_timer.is_active()
+        assert app._sleep_timer.state == "idle"
+
+    def test_cancel_sleep_timer(self, app):
+        app._cycle_sleep_timer()
+        assert app._sleep_timer.is_active()
+        app._cancel_sleep_timer()
+        assert not app._sleep_timer.is_active()
+
+    def test_new_station_cancels_timer(self, app):
+        s = Station("1", "A", "http://a", "", [], "MP3", 0, 0)
+        app._stations = [s]
+        app._cursor = 0
+        app._view = View.BROWSE
+        app._cycle_sleep_timer()
+        assert app._sleep_timer.is_active()
+        app._play_selected()
+        assert not app._sleep_timer.is_active()
+
+    def test_space_stops_and_cancels_timer(self, app):
+        with patch.object(app._player, "is_playing", return_value=True):
+            app._cycle_sleep_timer()
+            assert app._sleep_timer.is_active()
+            app._space()
+        assert not app._sleep_timer.is_active()

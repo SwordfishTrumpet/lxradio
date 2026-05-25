@@ -12,6 +12,7 @@ from .key_dispatcher import make_default_dispatcher
 from .player import Player
 from .radio_browser import Station, report_click, search, search_by_tag, search_by_tags, top_stations
 from .renderer import DrawState, Renderer
+from .sleep_timer import SleepTimer
 
 
 class View(Enum):
@@ -25,6 +26,11 @@ class RadioApp:
         self._favorites = Favorites()
         self._history = History()
         self._player = Player(on_metadata=self._on_metadata, on_error=self._on_error, on_history=self._on_history)
+        self._sleep_timer = SleepTimer(
+            get_volume=lambda: self._player.get_volume(),
+            set_volume=lambda v: self._player.set_volume(v),
+            on_expire=self._on_sleep_expire,
+        )
         self._stations: list[Station] = []
         self._cursor: int = 0
         self._scroll: int = 0
@@ -112,6 +118,8 @@ class RadioApp:
             favorites={s.id for s in self._favorites.all()},
             is_history_view=self._view == View.HISTORY,
             history_timestamps=history_timestamps,
+            sleep_remaining=self._sleep_timer.remaining_seconds(),
+            sleep_fading=self._sleep_timer.is_fading(),
         )
 
     def _handle_nav_key(self, key: int) -> bool:
@@ -160,10 +168,34 @@ class RadioApp:
         self._player.toggle_mute()
         self._status_msg = "Muted" if self._player.is_muted() else "Unmuted"
 
+    def _on_sleep_expire(self) -> None:
+        self._player.stop()
+        self._song_title = ""
+        self._status_msg = "Sleep timer finished"
+        self._dirty = True
+
+    def _cycle_sleep_timer(self) -> None:
+        result = self._sleep_timer.cycle_preset()
+        if result is None:
+            self._sleep_timer.cancel()
+            self._status_msg = "Sleep timer off"
+        else:
+            label, duration = result
+            self._sleep_timer.start(duration)
+            self._status_msg = f"Sleep timer: {label}"
+        self._dirty = True
+
+    def _cancel_sleep_timer(self) -> None:
+        if self._sleep_timer.is_active():
+            self._sleep_timer.cancel()
+            self._status_msg = "Sleep timer cancelled"
+            self._dirty = True
+
     def _space(self) -> None:
         stations = self._current_stations()
         if self._player.is_playing():
             self._player.stop()
+            self._sleep_timer.cancel()
             self._status_msg = "Stopped"
         elif stations:
             self._play_selected()
@@ -205,6 +237,7 @@ class RadioApp:
             return
         station = stations[self._cursor]
         self._station_cache[station.id] = station
+        self._sleep_timer.cancel()
         self._song_title, self._status_msg = "", f"Connecting to {station.name}…"
         if self._player.play(station):
             self._now_playing = station

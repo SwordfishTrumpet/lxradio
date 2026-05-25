@@ -116,6 +116,8 @@ class DrawState:
     favorites: set[str]
     is_history_view: bool = False
     history_timestamps: list[float] = field(default_factory=list)
+    sleep_remaining: float = 0.0
+    sleep_fading: bool = False
 
 
 class Renderer:
