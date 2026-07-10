@@ -14,6 +14,24 @@ from .radio_browser import Station, report_click, search, search_by_tag, search_
 from .renderer import DrawState, Renderer
 from .sleep_timer import SleepTimer
 
+_DNS_ERRNO = 8  # macOS: nodename nor servname provided, or not known
+
+
+def _friendly_error(e: Exception) -> str:
+    """Wrap common network errors in user-friendly messages."""
+    if isinstance(e, urllib.error.URLError):
+        reason = e.reason
+        if isinstance(reason, OSError) and getattr(reason, "errno", None) == _DNS_ERRNO:
+            return "Network error: cannot resolve radio-browser.info (check your internet connection)"
+        return f"Connection error: {reason}"
+    if isinstance(e, TimeoutError):
+        return "Network error: request timed out (try again)"
+    if isinstance(e, OSError):
+        if getattr(e, "errno", None) == _DNS_ERRNO:
+            return "Network error: cannot resolve station host (check your internet connection)"
+        return f"Connection error: {e}"
+    return f"Error: {e}"
+
 
 class View(Enum):
     BROWSE = auto()
@@ -85,7 +103,13 @@ class RadioApp:
 
     def _build_draw_state(self) -> DrawState:
         h, w = self._scr.getmaxyx()
-        stations = self._current_stations()
+        history_timestamps = []
+        if self._view == View.HISTORY:
+            entries = self._history.all()
+            stations = [entry.to_station() for entry in entries]
+            history_timestamps = [entry.timestamp for entry in entries]
+        else:
+            stations = self._current_stations()
         if self._cursor < self._scroll:
             self._scroll = self._cursor
         if self._cursor >= self._scroll + (h - 6):
@@ -95,9 +119,7 @@ class RadioApp:
             view_label = "FAVOURITES"
         elif self._view == View.HISTORY:
             view_label = "HISTORY"
-        history_timestamps = []
-        if self._view == View.HISTORY:
-            history_timestamps = [entry.timestamp for entry in self._history.all()]
+
         return DrawState(
             view_label=view_label,
             loading=self._loading,
@@ -277,7 +299,7 @@ class RadioApp:
                 results = self._stations_loader(offset) if self._stations_loader else []
                 status_msg = ""
             except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError, ValueError) as e:
-                results, status_msg = [], f"Error: {e}"
+                results, status_msg = [], _friendly_error(e)
             with self._lock:
                 existing = {s.id for s in self._stations}
                 new_stations = [s for s in results if s.id not in existing]

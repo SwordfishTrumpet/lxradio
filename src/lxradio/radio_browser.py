@@ -93,7 +93,7 @@ def _resolve_host() -> str:
 
 
 def _get(path: str, params: dict | None = None) -> list[dict]:
-    hosts = [_resolve_host(), *_FALLBACK_HOSTS]
+    hosts = list(dict.fromkeys([_resolve_host(), *_FALLBACK_HOSTS]))
     last_exc: Exception | None = None
     for host in hosts:
         base = f"https://{host}/json"
@@ -222,7 +222,7 @@ def search_by_tags(tags: list[str], limit: int = 60, offset: int = 0) -> list[St
 
 def _click(path: str) -> None:
     """Fire a request and ignore the response body. Used for click tracking."""
-    hosts = [_resolve_host(), *_FALLBACK_HOSTS]
+    hosts = list(dict.fromkeys([_resolve_host(), *_FALLBACK_HOSTS]))
     for host in hosts:
         url = f"https://{host}/json{path}"
         req = urllib.request.Request(

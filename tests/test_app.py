@@ -435,7 +435,7 @@ class TestRadioAppLogic:
         # Worker runs in background; give it a moment
         import time
         time.sleep(0.1)
-        assert "Error:" in app._status_msg
+        assert "Connection error:" in app._status_msg
 
     def test_maybe_load_more_triggers(self, app):
         app._scr.getmaxyx.return_value = (24, 80)

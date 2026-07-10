@@ -22,3 +22,4 @@ coverage.xml
 # Project-specific exclusions
 TODO.md
 AGENTS.md
+.DS_Store
