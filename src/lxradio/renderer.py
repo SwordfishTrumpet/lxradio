@@ -95,7 +95,7 @@ def compute_layout(w: int) -> StationRowLayout:
     gap = 2
     name_col = 5
     name_w = min(35, w // 3)
-    country_w = min(15, w // 6)
+    country_w = min(23, w // 6)
     country_col = name_col + name_w + gap
     tag_col = country_col + country_w + gap
     tag_w = max(0, w - tag_col - 14)
