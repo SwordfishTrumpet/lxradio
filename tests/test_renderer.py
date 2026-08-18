@@ -1,5 +1,6 @@
 """Tests for lxradio.renderer."""
 
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -13,6 +14,7 @@ from lxradio.renderer import (
     _trunc,
     _vol_bar,
     compute_layout,
+    format_time_ago,
 )
 
 
@@ -30,6 +32,14 @@ class TestHelpers:
         assert _vol_bar(50, 10) == "█████░░░░░"
         assert _vol_bar(0, 10) == "░░░░░░░░░░"
         assert _vol_bar(100, 10) == "██████████"
+
+    def test_format_time_ago(self):
+        now = time.time()
+        assert format_time_ago(now - 30) == "now"
+        assert format_time_ago(now - 600) == "10m"
+        assert format_time_ago(now - 7200) == "2h"
+        assert format_time_ago(now - 3 * 86400) == "3d"
+        assert format_time_ago(now + 100) == "now"  # future timestamps -> now
 
 
 class TestSafeAddstr:
@@ -61,6 +71,12 @@ class TestSafeAddstr:
         caplog.set_level("WARNING")
         _safe_addstr(scr, 5, 5, "hello")
         assert len(caplog.records) >= 1
+
+    def test_double_failure_no_crash(self, scr):
+        scr.addstr.side_effect = Exception
+        scr.getmaxyx.side_effect = Exception
+        # Both addstr and getmaxyx raise; must not propagate.
+        _safe_addstr(scr, 5, 0, "hello")
 
 
 class TestStationRowLayout:
@@ -124,12 +140,14 @@ class TestRenderer:
         defaults.update(kwargs)
         return DrawState(**defaults)
 
-    def test_draw_header_truncation_preserves_count_on_narrow(self, renderer):
+    def test_draw_header_truncation_keeps_identity_on_narrow(self, renderer):
+        # BUG-8: over-long headers keep the app identity (head) rather than the count.
         state = self._make_state(station_count=1, view_label="STATIONS")
         renderer._draw_header(state, 10)
         call = renderer._scr.addstr.call_args
         text = call[0][2]
-        assert "(1)" in text
+        assert "◉" in text
+        assert "(1)" not in text
 
     def test_draw_header_loading(self, renderer):
         state = self._make_state(loading=True, spinner_i=0, view_label="STATIONS")
@@ -292,3 +310,40 @@ class TestRenderer:
         calls = renderer._scr.addstr.call_args_list
         texts = [c[0][2] for c in calls]
         assert not any("Sleep:" in t for t in texts)
+
+    def test_draw_normal_path(self, renderer):
+        # Exercises the full draw() entry path (header/search/list/now_playing/footer).
+        state = self._make_state()
+        renderer.draw(state)
+        assert renderer._scr.refresh.call_count >= 1
+
+    def test_draw_tiny_terminal_guard(self, renderer):
+        renderer._scr.getmaxyx.return_value = (5, 20)
+        state = self._make_state()
+        renderer.draw(state)
+        texts = [c[0][2] for c in renderer._scr.addstr.call_args_list if len(c.args) >= 3]
+        assert any("Terminal too small" in t for t in texts)
+
+    def test_draw_station_row_wide_with_time(self, renderer):
+        s = Station("1", "A", "http://a", "US", ["jazz"], "MP3", 128, 10)
+        layout = compute_layout(80)
+        renderer._draw_station_row(2, 80, layout, s, True, True, True, time_str="2m")
+        texts = [c[0][2] for c in renderer._scr.addstr.call_args_list if len(c.args) >= 3]
+        assert any("2m" in t for t in texts)
+
+    def test_draw_station_list_non_empty(self, renderer):
+        s = Station("1", "A", "http://a", "US", ["jazz"], "MP3", 128, 10)
+        state = self._make_state(
+            stations=[s], is_history_view=True, history_timestamps=[time.time()]
+        )
+        renderer._draw_station_list(state, 24, 80)
+        texts = [c[0][2] for c in renderer._scr.addstr.call_args_list if len(c.args) >= 3]
+        assert any("A" in t for t in texts)
+
+    def test_draw_station_list_visible_rows(self, renderer):
+        # A full list larger than the visible window: only the window is drawn.
+        stations = [Station(str(i), f"S{i}", "http://a", "", [], "MP3", 0, 0) for i in range(40)]
+        state = self._make_state(stations=stations)
+        renderer._draw_station_list(state, 24, 80)
+        texts = [c[0][2] for c in renderer._scr.addstr.call_args_list if len(c.args) >= 3]
+        assert any("S0" in t for t in texts)

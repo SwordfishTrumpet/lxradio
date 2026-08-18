@@ -100,6 +100,13 @@ def test_short_timer_enters_fading_immediately(vol: FakeVolume, expired: list[bo
     timer.cancel()
 
 
+def test_preset_index(vol: FakeVolume, expired: list[bool]) -> None:
+    timer = make_timer(vol, expired)
+    assert timer.preset_index == -1
+    timer.preset_index = 2
+    assert timer.preset_index == 2
+
+
 def test_cycle_preset(vol: FakeVolume, expired: list[bool]) -> None:
     timer = make_timer(vol, expired)
 
@@ -141,6 +148,25 @@ def test_expire_calls_callback(vol: FakeVolume, expired: list[bool]) -> None:
     assert expired[0]
     assert timer.state == "idle"
     assert timer.remaining_seconds() == 0.0
+
+
+def test_expire_checks_stop_event_before_callback(vol: FakeVolume, expired: list[bool], monkeypatch) -> None:
+    # Covers the defensive re-check in _run: if the stop event is set between the
+    # tick wait and the expiry branch, on_expire must not fire. Patch wait()
+    # BEFORE start() so the spawned thread sees the fake wait from its first tick.
+    timer = make_timer(vol, expired)
+    calls = {"n": 0}
+
+    def fake_wait(self, timeout=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            timer._stop_event.set()
+        return False
+
+    monkeypatch.setattr(threading.Event, "wait", fake_wait)
+    timer.start(1)
+    time.sleep(0.1)
+    assert not expired[0]
 
 
 def test_thread_safety_race(vol: FakeVolume, expired: list[bool]) -> None:

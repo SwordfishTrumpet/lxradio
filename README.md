@@ -310,7 +310,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and pu
 ## Known Limitations
 
 - **Linux Volume:** On Linux, mpv IPC is attempted first for volume control; if the IPC socket is unavailable, `pactl` is used as a fallback. This means volume changes may still affect the global PulseAudio sink when mpv is not running or the socket is missing.
-- **Merged Search Pagination:** Free-text search merges results from the `name`, `tag`, and `country` API endpoints client-side. Because each endpoint ranks independently, paginated results may occasionally contain gaps or appear out of strict vote order.
+- **Broad Search Returns One Page:** Free-text search merges results from the `name`, `tag`, and `country` API endpoints client-side. Because each endpoint ranks independently, results are fetched in a single page and infinite scroll is disabled for broad (non-tag) searches, so you may see fewer matches than a single endpoint alone would return. Tag-prefixed searches (`tag:`) still page normally.
 
 ---
 

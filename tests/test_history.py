@@ -205,3 +205,75 @@ class TestHistory:
         assert len(entries) == 1
         assert entries[0].station_id == "1"
         assert entries[0].song_title == "Song A"
+
+    def test_add_dedupes_by_station(self):
+        # BUG-11: repeated plays of the same station collapse to one entry per
+        # session, keeping the most recent timestamp/title.
+        h = History()
+        h.add(self._make_station("1", "A"), song_title="Song A")
+        time.sleep(0.01)
+        h.add(self._make_station("2", "B"), song_title="Song B")
+        time.sleep(0.01)
+        h.add(self._make_station("1", "A"), song_title="Song A2")
+        entries = h.all()
+        assert len(entries) == 2
+        assert [e.station_id for e in entries] == ["1", "2"]
+        assert entries[0].song_title == "Song A2"
+
+    def test_load_read_failure_backs_up(self, tmp_path, monkeypatch, caplog):
+        from pathlib import Path as _Path
+        test_file = tmp_path / "history.jsonl"
+        test_file.write_text("x")
+        monkeypatch.setattr("lxradio.history._HISTORY_FILE", test_file)
+        monkeypatch.setattr("lxradio.history._CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(_Path, "read_text", lambda self, **kw: (_ for _ in ()).throw(OSError("EACCES")))
+        with caplog.at_level("ERROR"):
+            h = History()
+        assert len(h.all()) == 0
+        assert (tmp_path / "history.jsonl.bak").exists()
+
+    def test_load_skips_blank_lines(self, tmp_path, monkeypatch):
+        test_file = tmp_path / "history.jsonl"
+        test_file.write_text(
+            json.dumps({"timestamp": 1.0, "station_id": "1", "station_name": "A", "url": "http://a", "country": "US", "tags": [], "codec": "MP3", "bitrate": 128, "votes": 10, "favicon": "", "song_title": ""})
+            + "\n\n"
+            + json.dumps({"timestamp": 2.0, "station_id": "2", "station_name": "B", "url": "http://b", "country": "US", "tags": [], "codec": "MP3", "bitrate": 128, "votes": 10, "favicon": "", "song_title": ""})
+        )
+        monkeypatch.setattr("lxradio.history._HISTORY_FILE", test_file)
+        monkeypatch.setattr("lxradio.history._CONFIG_DIR", tmp_path)
+        h = History()
+        assert len(h.all()) == 2
+
+    def test_load_skips_malformed_last_field_line(self, tmp_path, monkeypatch):
+        test_file = tmp_path / "history.jsonl"
+        valid = {"timestamp": 1.0, "station_id": "1", "station_name": "A", "url": "http://a", "country": "US", "tags": [], "codec": "MP3", "bitrate": 128, "votes": 10, "favicon": "", "song_title": ""}
+        bad = dict(valid, bitrate="abc")  # int("abc") raises ValueError
+        test_file.write_text(json.dumps(valid) + "\n" + json.dumps(bad))
+        monkeypatch.setattr("lxradio.history._HISTORY_FILE", test_file)
+        monkeypatch.setattr("lxradio.history._CONFIG_DIR", tmp_path)
+        h = History()
+        assert len(h.all()) == 1
+        assert h.all()[0].station_id == "1"
+
+    def test_load_field_error_in_middle_backs_up(self, tmp_path, monkeypatch, caplog):
+        test_file = tmp_path / "history.jsonl"
+        valid = {"timestamp": 1.0, "station_id": "1", "station_name": "A", "url": "http://a", "country": "US", "tags": [], "codec": "MP3", "bitrate": 128, "votes": 10, "favicon": "", "song_title": ""}
+        bad = dict(valid, bitrate="abc")
+        test_file.write_text(json.dumps(valid) + "\n" + json.dumps(bad) + "\n" + json.dumps(valid))
+        monkeypatch.setattr("lxradio.history._HISTORY_FILE", test_file)
+        monkeypatch.setattr("lxradio.history._CONFIG_DIR", tmp_path)
+        with caplog.at_level("ERROR"):
+            h = History()
+        assert len(h.all()) == 0
+        assert (tmp_path / "history.jsonl.bak").exists()
+
+    def test_load_trims_to_cap(self, tmp_path, monkeypatch):
+        test_file = tmp_path / "history.jsonl"
+        lines = []
+        for i in range(1001):
+            lines.append(json.dumps({"timestamp": float(i), "station_id": str(i), "station_name": f"S{i}", "url": f"http://{i}", "country": "US", "tags": [], "codec": "MP3", "bitrate": 128, "votes": 10, "favicon": "", "song_title": ""}))
+        test_file.write_text("\n".join(lines))
+        monkeypatch.setattr("lxradio.history._HISTORY_FILE", test_file)
+        monkeypatch.setattr("lxradio.history._CONFIG_DIR", tmp_path)
+        h = History()
+        assert len(h.all()) == 1000

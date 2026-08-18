@@ -75,31 +75,47 @@ class HistoryEntry:
         )
 
 
+def _entry_to_line(entry: HistoryEntry) -> str:
+    data = {
+        "timestamp": entry.timestamp,
+        "station_id": entry.station_id,
+        "station_name": entry.station_name,
+        "url": entry.url,
+        "country": entry.country,
+        "tags": entry.tags,
+        "codec": entry.codec,
+        "bitrate": entry.bitrate,
+        "votes": entry.votes,
+        "favicon": entry.favicon,
+        "song_title": entry.song_title,
+    }
+    return json.dumps(data, ensure_ascii=False) + "\n"
+
+
 class History:
     def __init__(self) -> None:
         self._entries: list[HistoryEntry] = []
         self._lock = threading.Lock()
+        self._io_lock = threading.Lock()
+        self._revision: int = 0
         self._load()
 
     def add(self, station: Station, song_title: str = "") -> None:
-        entry = HistoryEntry(
-            timestamp=time.time(),
-            station_id=station.id,
-            station_name=station.name,
-            url=station.url,
-            country=station.country,
-            tags=list(station.tags),
-            codec=station.codec,
-            bitrate=station.bitrate,
-            votes=station.votes,
-            favicon=station.favicon,
-            song_title=song_title,
-        )
+        entry = HistoryEntry.from_station(station, song_title).with_timestamp(time.time())
         with self._lock:
+            # Keep one entry per station *session*: a new song for a station we're
+            # already listening to replaces the previous entry (BUG-11).
+            for i in range(len(self._entries) - 1, -1, -1):
+                if self._entries[i].station_id == station.id:
+                    self._entries.pop(i)
+                    break
             self._entries.append(entry)
             if len(self._entries) > _MAX_ENTRIES:
                 self._entries = self._entries[-_MAX_ENTRIES:]
-            self._save()
+            self._revision += 1
+            revision = self._revision
+            snapshot = list(self._entries)
+        self._save(revision, snapshot)
 
     def all(self) -> list[HistoryEntry]:
         with self._lock:
@@ -115,35 +131,29 @@ class History:
     def clear(self) -> None:
         with self._lock:
             self._entries = []
-            self._save()
+            self._revision += 1
+            revision = self._revision
+        self._save(revision, [])
 
-    def _save(self) -> None:
-        _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        tmp = _HISTORY_FILE.with_suffix(".jsonl.tmp")
-        try:
-            with tmp.open("w", encoding="utf-8") as f:
-                for entry in self._entries:
-                    line = json.dumps(
-                        {
-                            "timestamp": entry.timestamp,
-                            "station_id": entry.station_id,
-                            "station_name": entry.station_name,
-                            "url": entry.url,
-                            "country": entry.country,
-                            "tags": entry.tags,
-                            "codec": entry.codec,
-                            "bitrate": entry.bitrate,
-                            "votes": entry.votes,
-                            "favicon": entry.favicon,
-                            "song_title": entry.song_title,
-                        },
-                        ensure_ascii=False,
-                    )
-                    f.write(line + "\n")
-            os.replace(tmp, _HISTORY_FILE)
-        except OSError as exc:
-            logger.error("Failed to save history file (%s): %s", _HISTORY_FILE, exc)
-            raise
+    def _save(self, revision: int, snapshot: list[HistoryEntry]) -> None:
+        # File I/O happens on a dedicated IO lock so _lock is never held during
+        # disk writes, which would otherwise block all()/get() on the UI thread
+        # (BUG-12). A revision guard prevents a stale snapshot from overwriting
+        # a newer one that was saved meanwhile.
+        with self._io_lock:
+            with self._lock:
+                if revision != self._revision:
+                    return
+            _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            tmp = _HISTORY_FILE.with_suffix(".jsonl.tmp")
+            try:
+                with tmp.open("w", encoding="utf-8") as f:
+                    for entry in snapshot:
+                        f.write(_entry_to_line(entry))
+                os.replace(tmp, _HISTORY_FILE)
+            except OSError as exc:
+                logger.error("Failed to save history file (%s): %s", _HISTORY_FILE, exc)
+                raise
 
     def _load(self) -> None:
         if not _HISTORY_FILE.exists():
@@ -192,7 +202,7 @@ class History:
                 self._backup_and_reset(exc)
                 return
 
-        if had_content and not entries:
+        if had_content and not entries:  # pragma: no cover - defensive; unreachable with current parsing
             # File had non-empty lines but none were valid
             self._backup_and_reset(json.JSONDecodeError("No valid entries", doc=raw, pos=0))
             return

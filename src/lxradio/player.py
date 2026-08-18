@@ -8,7 +8,6 @@ import socket
 import subprocess
 import sys
 import threading
-import time
 from collections.abc import Callable
 
 from .radio_browser import Station
@@ -54,8 +53,6 @@ class Player:
         self._pre_mute_volume: int = 80
         self._muted: bool = False
         self._lock = threading.Lock()
-        self._last_output_at: float = 0.0
-        self._heartbeat_timeout: float = 30.0
         self._ipc_socket: str | None = None
         self._stop_requested = threading.Event()
 
@@ -91,7 +88,6 @@ class Player:
                 )
                 self._current_title = ""
                 self._current_station = station
-                self._last_output_at = time.monotonic()
         except (FileNotFoundError, PermissionError, OSError) as exc:
             msg = "mpv not found in PATH" if isinstance(exc, FileNotFoundError) else f"Failed to start mpv: {exc}"
             if self._on_error:
@@ -119,7 +115,6 @@ class Player:
             self._proc = None
             self._current_title = ""
             self._current_station = None
-            self._last_output_at = 0.0
             if self._ipc_socket:
                 with contextlib.suppress(OSError):
                     os.unlink(self._ipc_socket)
@@ -131,15 +126,15 @@ class Player:
 
     def is_playing(self) -> bool:
         with self._lock:
-            if self._proc is None or self._proc.poll() is not None:
-                return False
-            return not (
-                self._last_output_at
-                and time.monotonic() - self._last_output_at > self._heartbeat_timeout
-            )
+            return self._proc is not None and self._proc.poll() is None
 
     def set_volume(self, vol: int) -> None:
-        self._volume = max(0, min(100, vol))
+        vol = max(0, min(100, vol))
+        if self._volume > 0 and vol == 0:
+            # Reaching zero via a direct set (volume_down / mute): remember the
+            # last non-zero value so toggle_mute can restore a sensible volume.
+            self._pre_mute_volume = self._volume
+        self._volume = vol
         self._muted = self._volume == 0
         self._system_volume(self._volume)
 
@@ -154,12 +149,12 @@ class Player:
 
     def toggle_mute(self) -> None:
         if self._muted:
-            self.set_volume(self._pre_mute_volume)
-            self._muted = False
+            target = self._pre_mute_volume if self._pre_mute_volume > 0 else 50
+            self.set_volume(target)
         else:
-            self._pre_mute_volume = self._volume
+            if self._volume > 0:
+                self._pre_mute_volume = self._volume
             self.set_volume(0)
-            self._muted = True
 
     def is_muted(self) -> bool:
         return self._muted
@@ -215,8 +210,6 @@ class Player:
             for line in proc.stdout:
                 if self._stop_requested.is_set():
                     break
-                with self._lock:
-                    self._last_output_at = time.monotonic()
                 line = line.strip()
                 m = _ICY_RE.search(line) or _TITLE_RE.search(line)
                 if m:

@@ -244,6 +244,23 @@ class TestPlayer:
         p._read_output()
         assert p.current_title == ""
 
+    def test_read_output_returns_when_proc_is_none(self):
+        p = Player()
+        p._proc = None
+        p._read_output()
+        assert p.current_title == ""
+
+    def test_read_output_breaks_on_stop_requested(self):
+        p = Player()
+        p._stop_requested.set()
+        stdout = io.StringIO("icy-title: X\n")
+        fake_proc = MagicMock()
+        fake_proc.stdout = stdout
+        p._proc = fake_proc
+        p._read_output()
+        # Stop was requested before parsing the line; title stays empty.
+        assert p.current_title == ""
+
     def test_system_volume_skipped_on_macos(self, monkeypatch):
         p = Player()
         monkeypatch.setattr("lxradio.player._IS_MACOS", True)
@@ -296,6 +313,16 @@ class TestPlayer:
         # Should not raise
         p._system_volume(50)
 
+    def test_system_volume_linux_ipc_returns_true(self, monkeypatch):
+        p = Player()
+        monkeypatch.setattr("lxradio.player._IS_MACOS", False)
+        with patch.object(p, "_mpv_ipc_set_volume", return_value=True) as mock_ipc, patch(
+            "subprocess.run"
+        ) as mock_run:
+            p._system_volume(50)
+        mock_ipc.assert_called_once_with(50)
+        mock_run.assert_not_called()
+
     def test_system_volume_linux_ipc_first(self, monkeypatch, tmp_path):
         import socket
         import threading
@@ -346,21 +373,26 @@ class TestPlayer:
             capture_output=True,
         )
 
-    def test_is_playing_heartbeat_timeout(self):
+    def test_is_playing_process_alive_ignores_silent_stream(self):
+        # BUG-1: liveness is process-based. A stream that sends no metadata must
+        # still be reported as playing.
         p = Player()
         fake_proc = MagicMock()
         fake_proc.poll.return_value = None
         p._proc = fake_proc
-        p._last_output_at = time.monotonic() - 60.0
+        assert p.is_playing()
+
+    def test_is_playing_process_dead(self):
+        p = Player()
+        fake_proc = MagicMock()
+        fake_proc.poll.return_value = 0
+        p._proc = fake_proc
         assert not p.is_playing()
 
-    def test_is_playing_heartbeat_active(self):
+    def test_is_playing_no_proc(self):
         p = Player()
-        fake_proc = MagicMock()
-        fake_proc.poll.return_value = None
-        p._proc = fake_proc
-        p._last_output_at = time.monotonic()
-        assert p.is_playing()
+        p._proc = None
+        assert not p.is_playing()
 
     def test_metadata_callback_thread_safe(self):
         p = Player()

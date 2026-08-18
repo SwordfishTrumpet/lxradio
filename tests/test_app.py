@@ -1,6 +1,8 @@
 """Tests for lxradio.app."""
 
 import curses
+import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -8,6 +10,48 @@ import pytest
 from lxradio.app import RadioApp, View
 from lxradio.radio_browser import Station
 from lxradio.renderer import _trunc, _vol_bar
+
+
+class TestFriendlyError:
+    def test_dns_urlerror(self):
+        import socket
+        import urllib.error
+
+        from lxradio.app import _friendly_error
+        e = urllib.error.URLError(socket.gaierror(-2, "Name or service not known"))
+        assert "cannot resolve" in _friendly_error(e)
+
+    def test_dns_gaierror_direct(self):
+        import socket
+
+        from lxradio.app import _friendly_error
+        assert "cannot resolve" in _friendly_error(socket.gaierror(-2, "no"))
+
+    def test_macos_dns_errno(self):
+        import urllib.error
+
+        from lxradio.app import _friendly_error
+        e = urllib.error.URLError(OSError(8, "nodename nor servname"))
+        assert "cannot resolve" in _friendly_error(e)
+
+    def test_timeout(self):
+        from lxradio.app import _friendly_error
+        assert "timed out" in _friendly_error(TimeoutError())
+
+    def test_generic_oserror(self):
+        from lxradio.app import _friendly_error
+        assert "Connection error" in _friendly_error(OSError("boom"))
+
+    def test_urlerror_non_dns(self):
+        import urllib.error
+
+        from lxradio.app import _friendly_error
+        e = urllib.error.URLError("http error")
+        assert "Connection error: http error" in _friendly_error(e)
+
+    def test_other_exception(self):
+        from lxradio.app import _friendly_error
+        assert "Error" in _friendly_error(ValueError("x"))
 
 
 class TestHelpers:
@@ -168,7 +212,9 @@ class TestRadioAppLogic:
             result = app._handle_nav_key(10)
         assert result is False
         mock_play.assert_called_once_with(s2)
-        assert app._now_playing == s1  # unchanged because play failed
+        # BUG-5: play() already stopped the old stream, so a failed play must not
+        # leave a stale "now playing" bar pointing at a dead player.
+        assert app._now_playing is None
 
     def test_nav_empty_list_no_crash(self, app):
         app._stations = []
@@ -527,11 +573,16 @@ class TestRadioAppLogic:
 
     def test_on_metadata(self, app):
         app._song_title = ""
-        app._status_msg = "Loading..."
+        app._status_msg = "Connecting to Jazz FM…"
         app._on_metadata("Song Title")
         assert app._song_title == "Song Title"
-        assert app._status_msg == ""
+        assert app._status_msg == ""  # transient Connecting… status is cleared
         assert app._dirty is True
+
+    def test_on_metadata_preserves_real_error_status(self, app):
+        app._status_msg = "Connection error: something"
+        app._on_metadata("Song Title")
+        assert app._status_msg == "Connection error: something"
 
     def test_shutdown_stops_player(self, app):
         with patch.object(app._player, "stop") as mock_stop:
@@ -702,3 +753,128 @@ class TestRadioAppLogic:
         assert app._now_playing is None
         assert app._song_title == ""
         assert app._status_msg == "Sleep timer finished"
+
+    def test_build_draw_state_browse(self, app):
+        app._stations = [Station("1", "A", "http://a", "", [], "MP3", 0, 0)]
+        app._view = View.BROWSE
+        state = app._build_draw_state()
+        assert state.view_label == "STATIONS"
+        assert state.station_count == 1
+
+    def test_build_draw_state_favorites_label(self, app):
+        s = Station("1", "A", "http://a", "", [], "MP3", 0, 0)
+        app._favorites.add(s)
+        app._view = View.FAVORITES
+        state = app._build_draw_state()
+        assert state.view_label == "FAVOURITES"
+        assert state.station_count == 1
+
+    def test_build_draw_state_scroll_clamp_up(self, app):
+        stations = [Station(str(i), f"S{i}", "http://a", "", [], "MP3", 0, 0) for i in range(30)]
+        app._stations = stations
+        app._view = View.BROWSE
+        app._cursor = 5
+        app._scroll = 10  # cursor < scroll -> clamp scroll to cursor
+        state = app._build_draw_state()
+        assert state.scroll == 5
+
+    def test_build_draw_state_scroll_clamp_down(self, app):
+        stations = [Station(str(i), f"S{i}", "http://a", "", [], "MP3", 0, 0) for i in range(30)]
+        app._stations = stations
+        app._view = View.BROWSE
+        app._cursor = 29
+        app._scroll = 0
+        state = app._build_draw_state()
+        # cursor (29) >= scroll + (h-6) = 0 + 18 -> scroll = 29 - 18 + 1 = 12
+        assert state.scroll == 12
+
+    def test_history_view_cache_reused(self, app):
+        s = Station("1", "A", "http://a", "", [], "MP3", 0, 0)
+        app._history.add(s)
+        app._view = View.HISTORY
+        state1 = app._build_draw_state()
+        state2 = app._build_draw_state()
+        assert state1.station_count == 1
+        assert state2.station_count == 1
+        assert app._history_view_cache is not None
+
+    def test_load_batch_populates_stations_and_cache(self, app):
+        app._scr.getmaxyx.return_value = (24, 80)
+        s = Station("1", "A", "http://a", "", [], "MP3", 0, 0)
+        app._start_load(lambda offset: [s])
+        time.sleep(0.1)
+        assert len(app._stations) == 1
+        assert app._station_cache["1"] is s
+        assert app._loading is False
+
+    def test_load_batch_drops_stale_generation(self, app):
+        # BUG-3: an in-flight batch from an older _start_load must not pollute
+        # the list after a newer load supersedes it.
+        app._scr.getmaxyx.return_value = (24, 80)
+        gate = threading.Event()
+
+        def slow_loader(offset):
+            gate.wait(1)
+            return [Station("1", "A", "http://a", "", [], "MP3", 0, 0)]
+
+        app._start_load(slow_loader)  # gen 1 (blocking worker)
+        app._start_load(lambda offset: [])  # gen 2 supersedes
+        gate.set()
+        time.sleep(0.2)
+        assert app._stations == []
+
+    def test_start_load_switches_to_browse(self, app):
+        # BUG-4: searching from FAVORITES must switch to the BROWSE view so
+        # results are actually displayed.
+        app._view = View.FAVORITES
+        app._scr.getmaxyx.return_value = (24, 80)
+        app._start_load(lambda offset: [])
+        assert app._view == View.BROWSE
+
+    def test_broad_search_disables_paging(self, app):
+        # BUG-9: broad search() is not paginable after merge.
+        app._scr.getmaxyx.return_value = (24, 80)
+        app._search_mode = True
+        app._query = "jazz"
+        with patch("lxradio.app.search", return_value=[Station("1", "A", "http://a", "", [], "MP3", 0, 0)]):
+            app._handle_search_key(10)
+        assert app._stations_has_more is False
+        assert app._stations_paginable is False
+
+    def test_shutdown_cancels_sleep_timer(self, app):
+        app._cycle_sleep_timer()
+        assert app._sleep_timer.is_active()
+        with patch.object(app._player, "stop"):
+            app.shutdown()
+        assert not app._sleep_timer.is_active()
+
+    def test_restore_volume_after_sleep_expire(self, app):
+        app._player.set_volume(40)
+        app._cycle_sleep_timer()  # snapshots restore volume 40
+        app._player.set_volume(0)  # simulate fade
+        app._on_sleep_expire()
+        assert app._player.get_volume() == 40
+
+    def test_cancel_sleep_timer_restores_volume(self, app):
+        app._player.set_volume(55)
+        app._cycle_sleep_timer()
+        app._player.set_volume(0)
+        app._cancel_sleep_timer()
+        assert app._player.get_volume() == 55
+
+    def test_main_loop_quits_on_q(self, app):
+        # Smoke test for the curses main loop: pressing q ends the loop and shuts down.
+        with patch("lxradio.app.top_stations", return_value=[]), patch(
+            "lxradio.app.Renderer"
+        ) as mock_renderer_cls, patch.object(app._player, "stop") as mock_stop:
+            mock_renderer_cls.return_value = MagicMock()
+            app._scr.getch.side_effect = [ord("q")]
+            app._main(app._scr)
+            assert app._scr.getch.call_count >= 1
+            mock_stop.assert_called_once()
+
+    def test_run_wraps_main(self, app):
+        with patch("lxradio.app.curses") as mock_curses, patch.object(app, "_main") as mock_main:
+            mock_curses.wrapper.side_effect = lambda fn: fn(app._scr)
+            app.run()
+        mock_main.assert_called_once_with(app._scr)

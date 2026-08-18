@@ -13,6 +13,7 @@ from lxradio.radio_browser import (
     _resolve_host,
     report_click,
     search,
+    search_by_country,
     search_by_name,
     search_by_tag,
     search_by_tags,
@@ -118,6 +119,19 @@ class TestResolveHost:
         assert host == "de1.api.radio-browser.info"
 
 
+@pytest.fixture(autouse=True)
+def _reset_dns_state():
+    """Reset module-level DNS cache/failure globals so tests don't leak into each other."""
+    import lxradio.radio_browser as rb
+    rb._cached_host = None
+    rb._cached_at = 0.0
+    rb._cached_failure = False
+    yield
+    rb._cached_host = None
+    rb._cached_at = 0.0
+    rb._cached_failure = False
+
+
 class TestGet:
     @patch("lxradio.radio_browser.urllib.request.urlopen")
     @patch("lxradio.radio_browser._resolve_host", return_value="primary.host")
@@ -154,6 +168,17 @@ class TestGet:
         with pytest.raises(urllib.error.URLError):
             _get("/test")
 
+    @patch("lxradio.radio_browser.urllib.request.urlopen")
+    @patch("lxradio.radio_browser._resolve_host", return_value="primary.host")
+    def test_get_short_circuits_on_dns_failure(self, mock_resolve, mock_urlopen):
+        # PERF-2: when DNS is down, only the resolved fallback host is attempted.
+        import lxradio.radio_browser as rb
+        rb._cached_failure = True
+        mock_urlopen.side_effect = urllib.error.URLError("fail")
+        with pytest.raises(urllib.error.URLError):
+            _get("/test")
+        assert mock_urlopen.call_count == 1
+
 
 class TestSearchFunctions:
     @patch("lxradio.radio_browser._get")
@@ -181,6 +206,14 @@ class TestSearchFunctions:
         search_by_tag("rock", limit=10, offset=20)
         args = mock_get.call_args[0]
         assert args[1]["tag"] == "rock"
+        assert args[1]["offset"] == 20
+
+    @patch("lxradio.radio_browser._get")
+    def test_search_by_country(self, mock_get):
+        mock_get.return_value = []
+        search_by_country("US", limit=10, offset=20)
+        args = mock_get.call_args[0]
+        assert args[1]["country"] == "US"
         assert args[1]["offset"] == 20
 
     @patch("lxradio.radio_browser._get")
@@ -262,6 +295,16 @@ class TestClick:
         _click("/url/station-1")
         assert mock_urlopen.call_count == 1
         assert "primary.host" in mock_urlopen.call_args[0][0].full_url
+
+    @patch("lxradio.radio_browser.urllib.request.urlopen")
+    @patch("lxradio.radio_browser._resolve_host", return_value="primary.host")
+    def test_click_short_circuits_on_dns_failure(self, mock_resolve, mock_urlopen):
+        import lxradio.radio_browser as rb
+        from lxradio.radio_browser import _click
+        rb._cached_failure = True
+        mock_urlopen.side_effect = urllib.error.URLError("fail")
+        _click("/url/1")
+        assert mock_urlopen.call_count == 1
 
     @patch("lxradio.radio_browser.urllib.request.urlopen")
     @patch("lxradio.radio_browser._resolve_host", return_value="primary.host")

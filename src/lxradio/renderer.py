@@ -73,6 +73,13 @@ def format_time_ago(timestamp: float) -> str:
     return f"{int(diff // 86400)}d"
 
 
+def _format_sleep_timer(state: DrawState) -> tuple[str, bool]:
+    """Return the sleep-timer suffix text and whether it is currently fading."""
+    mins = int(state.sleep_remaining // 60)
+    secs = int(state.sleep_remaining % 60)
+    return f"  Sleep: {mins:02d}:{secs:02d}", state.sleep_fading
+
+
 class StationRowLayout(NamedTuple):
     name_w: int
     country_col: int
@@ -151,6 +158,13 @@ class Renderer:
         scr.erase()
         h, w = scr.getmaxyx()
 
+        if h < 8 or w < 30:
+            # Layout math goes negative on tiny windows; show a single message (BUG-16).
+            msg = "Terminal too small"
+            _safe_addstr(scr, max(0, h // 2), max(0, w // 2 - len(msg) // 2), msg, _dim())
+            scr.refresh()
+            return
+
         self._draw_header(state, w)
         self._draw_search_bar(state, w)
         self._draw_station_list(state, h, w)
@@ -165,8 +179,6 @@ class Renderer:
             label = f"  ◉ lxradio  ·  {state.view_label}  {spinner} loading…"
         else:
             label = f"  ◉ lxradio  ·  {state.view_label}  ({state.station_count})"
-        if len(label) > w:
-            label = label[-w:]
         _safe_addstr(
             self._scr,
             0,
@@ -291,13 +303,8 @@ class Renderer:
             title = state.song_title
             vol = state.player_volume
 
-            sleep_timer = ""
-            sleep_w = 0
-            if state.sleep_remaining > 0:
-                mins = int(state.sleep_remaining // 60)
-                secs = int(state.sleep_remaining % 60)
-                sleep_timer = f"  Sleep: {mins:02d}:{secs:02d}"
-                sleep_w = len(sleep_timer)
+            sleep_timer, fading = _format_sleep_timer(state) if state.sleep_remaining > 0 else ("", False)
+            sleep_w = len(sleep_timer)
 
             left = f"  ▶  {name}"
             if title:
@@ -311,7 +318,7 @@ class Renderer:
             if sleep_timer:
                 timer_attr = (
                     curses.color_pair(C.SLEEP_FADE) | curses.A_BOLD
-                    if state.sleep_fading
+                    if fading
                     else curses.color_pair(C.TITLE_SONG) | curses.A_BOLD
                 )
                 _safe_addstr(scr, y + 1, len(left), sleep_timer, timer_attr)
@@ -327,17 +334,13 @@ class Renderer:
             idle = "  ◉  Not playing"
             if state.status_msg:
                 idle += f"  —  {state.status_msg}"
-            sleep_timer = ""
-            if state.sleep_remaining > 0:
-                mins = int(state.sleep_remaining // 60)
-                secs = int(state.sleep_remaining % 60)
-                sleep_timer = f"  Sleep: {mins:02d}:{secs:02d}"
+            sleep_timer, fading = _format_sleep_timer(state) if state.sleep_remaining > 0 else ("", False)
             idle = _trunc(idle, w - len(sleep_timer))
 
             _safe_addstr(scr, y + 1, 0, idle, _dim())
 
             if sleep_timer:
-                timer_attr = _dim() | curses.A_BOLD if state.sleep_fading else _dim()
+                timer_attr = _dim() | curses.A_BOLD if fading else _dim()
                 _safe_addstr(scr, y + 1, len(idle), sleep_timer, timer_attr)
 
     def _draw_footer(self, state: DrawState, h: int, w: int) -> None:

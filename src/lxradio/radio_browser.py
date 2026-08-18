@@ -94,6 +94,12 @@ def _resolve_host() -> str:
 
 def _get(path: str, params: dict | None = None) -> list[dict]:
     hosts = list(dict.fromkeys([_resolve_host(), *_FALLBACK_HOSTS]))
+    with _dns_lock:
+        dns_failed = _cached_failure
+    if dns_failed:
+        # DNS is down; trying every fallback would stall for up to 3*timeout.
+        # Attempt only the resolved (cached-fallback) host (PERF-2).
+        hosts = hosts[:1]
     last_exc: Exception | None = None
     for host in hosts:
         base = f"https://{host}/json"
@@ -127,19 +133,22 @@ def top_stations(limit: int = 60, offset: int = 0) -> list[Station]:
     return [Station.from_api(d) for d in data if d.get("url_resolved")]
 
 
-def search_by_name(query: str, limit: int = 60, offset: int = 0) -> list[Station]:
-    data = _get(
-        "/stations/search",
-        {
-            "name": query,
-            "limit": limit,
-            "offset": offset,
-            "hidebroken": "true",
-            "order": "votes",
-            "reverse": "true",
-        },
-    )
+def _search_by(params: dict, limit: int, offset: int) -> list[Station]:
+    """Shared search-API helper: identical params + result mapping for all search_* wrappers."""
+    full = {
+        "limit": limit,
+        "offset": offset,
+        "hidebroken": "true",
+        "order": "votes",
+        "reverse": "true",
+    }
+    full.update(params)
+    data = _get("/stations/search", full)
     return [Station.from_api(d) for d in data if d.get("url_resolved")]
+
+
+def search_by_name(query: str, limit: int = 60, offset: int = 0) -> list[Station]:
+    return _search_by({"name": query}, limit, offset)
 
 
 _search_executor: concurrent.futures.ThreadPoolExecutor | None = None
@@ -153,18 +162,7 @@ def _get_search_executor() -> concurrent.futures.ThreadPoolExecutor:
 
 
 def search_by_country(country: str, limit: int = 60, offset: int = 0) -> list[Station]:
-    data = _get(
-        "/stations/search",
-        {
-            "country": country,
-            "limit": limit,
-            "offset": offset,
-            "hidebroken": "true",
-            "order": "votes",
-            "reverse": "true",
-        },
-    )
-    return [Station.from_api(d) for d in data if d.get("url_resolved")]
+    return _search_by({"country": country}, limit, offset)
 
 
 def search(query: str, limit: int = 100, offset: int = 0) -> list[Station]:
@@ -191,38 +189,20 @@ def search(query: str, limit: int = 100, offset: int = 0) -> list[Station]:
 
 
 def search_by_tag(tag: str, limit: int = 60, offset: int = 0) -> list[Station]:
-    data = _get(
-        "/stations/search",
-        {
-            "tag": tag,
-            "limit": limit,
-            "offset": offset,
-            "hidebroken": "true",
-            "order": "votes",
-            "reverse": "true",
-        },
-    )
-    return [Station.from_api(d) for d in data if d.get("url_resolved")]
+    return _search_by({"tag": tag}, limit, offset)
 
 
 def search_by_tags(tags: list[str], limit: int = 60, offset: int = 0) -> list[Station]:
-    data = _get(
-        "/stations/search",
-        {
-            "tagList": ",".join(tags),
-            "limit": limit,
-            "offset": offset,
-            "hidebroken": "true",
-            "order": "votes",
-            "reverse": "true",
-        },
-    )
-    return [Station.from_api(d) for d in data if d.get("url_resolved")]
+    return _search_by({"tagList": ",".join(tags)}, limit, offset)
 
 
 def _click(path: str) -> None:
     """Fire a request and ignore the response body. Used for click tracking."""
     hosts = list(dict.fromkeys([_resolve_host(), *_FALLBACK_HOSTS]))
+    with _dns_lock:
+        dns_failed = _cached_failure
+    if dns_failed:
+        hosts = hosts[:1]
     for host in hosts:
         url = f"https://{host}/json{path}"
         req = urllib.request.Request(
