@@ -306,11 +306,30 @@ class Renderer:
             sleep_timer, fading = _format_sleep_timer(state) if state.sleep_remaining > 0 else ("", False)
             sleep_w = len(sleep_timer)
 
+            # The volume reservation must match the actual rendered string
+            # (issue #12): the old hardcoded 16-column reservation was 5
+            # columns narrower than "vol ████████░░  80%  ", so the volume bar
+            # was placed at w-21 while the sleep timer could reach w-16,
+            # overwriting the countdown's tail.
+            vol_str = ""
+            if state.player_can_control_volume:
+                vol_str = (
+                    "vol  MUTED   "
+                    if state.player_is_muted
+                    else f"vol {_vol_bar(vol)} {vol:3d}%  "
+                )
+            vol_w = len(vol_str)
+
             left = f"  ▶  {name}"
             if title:
                 left += f"  —  {title}"
-            vol_w = 16 if state.player_can_control_volume else 0
             avail = w - vol_w - sleep_w
+            if avail < 0:
+                # Row narrower than the two fixed segments together: drop the
+                # least-important one (the sleep timer) so the remaining
+                # segments can never overlap.
+                sleep_timer, sleep_w = "", 0
+                avail = w - vol_w
             left = _trunc(left, avail)
 
             _safe_addstr(scr, y + 1, 0, left, curses.color_pair(C.TITLE_SONG) | curses.A_BOLD)
@@ -323,12 +342,7 @@ class Renderer:
                 )
                 _safe_addstr(scr, y + 1, len(left), sleep_timer, timer_attr)
 
-            if state.player_can_control_volume:
-                vol_str = (
-                    "vol  MUTED   "
-                    if state.player_is_muted
-                    else f"vol {_vol_bar(vol)} {vol:3d}%  "
-                )
+            if vol_str:
                 _safe_addstr(scr, y + 1, max(0, w - len(vol_str)), vol_str, _dim())
         else:
             idle = "  ◉  Not playing"

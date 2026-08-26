@@ -311,6 +311,76 @@ class TestRenderer:
         texts = [c[0][2] for c in calls]
         assert not any("Sleep:" in t for t in texts)
 
+    def _now_playing_segments(self, renderer, row_y=22):
+        """Return (start, end, text) for every addstr call on the now-playing row."""
+        segments = []
+        for call in renderer._scr.addstr.call_args_list:
+            args = call[0]
+            if len(args) >= 3 and args[0] == row_y and isinstance(args[2], str) and args[2]:
+                x, text = args[1], args[2]
+                segments.append((x, x + len(text), text))
+        return segments
+
+    def test_now_playing_timer_and_volume_never_overlap(self, renderer):
+        # Issue #12: with a long station name/title, an active sleep timer and a
+        # controllable volume, the volume display must never overwrite the
+        # sleep-timer countdown at any terminal width.
+        s = Station(
+            "1",
+            "A Very Long Station Name That Keeps Going On And On And On",
+            "http://a", "", [], "MP3", 0, 0,
+        )
+        for w in (30, 60, 80, 120):
+            renderer._scr.addstr.reset_mock()
+            state = self._make_state(
+                now_playing=s,
+                song_title="An Even Longer Song Title That Also Keeps Going",
+                player_volume=80,
+                player_can_control_volume=True,
+                sleep_remaining=900.0,
+                sleep_fading=False,
+            )
+            renderer._draw_now_playing(state, 24, w)
+            segments = self._now_playing_segments(renderer)
+            volume = next((seg for seg in segments if seg[2].lstrip().startswith("vol")), None)
+            assert volume is not None, f"volume missing at width {w}"
+            timer = next((seg for seg in segments if "Sleep:" in seg[2]), None)
+            if timer is not None:
+                assert timer[1] <= volume[0], (
+                    f"overlap at width {w}: timer spans [{timer[0]},{timer[1]}], "
+                    f"volume starts at {volume[0]}"
+                )
+            else:
+                # At widths where the two fixed segments cannot both fit, the
+                # timer is dropped rather than overwritten.
+                pass
+
+    def test_now_playing_timer_and_volume_both_drawn_when_they_fit(self, renderer):
+        # Issue #12 DoD: on normal widths both segments are drawn, side by side,
+        # with the volume block starting exactly where the timer ends.
+        s = Station(
+            "1",
+            "A Very Long Station Name That Keeps Going On And On And On",
+            "http://a", "", [], "MP3", 0, 0,
+        )
+        for w in (60, 80, 120):
+            renderer._scr.addstr.reset_mock()
+            state = self._make_state(
+                now_playing=s,
+                song_title="An Even Longer Song Title That Also Keeps Going",
+                player_volume=80,
+                player_can_control_volume=True,
+                sleep_remaining=900.0,
+                sleep_fading=False,
+            )
+            renderer._draw_now_playing(state, 24, w)
+            segments = self._now_playing_segments(renderer)
+            timer = next((seg for seg in segments if "Sleep:" in seg[2]), None)
+            volume = next((seg for seg in segments if seg[2].lstrip().startswith("vol")), None)
+            assert timer is not None, f"timer missing at width {w}"
+            assert volume is not None, f"volume missing at width {w}"
+            assert timer[1] <= volume[0], f"overlap at width {w}"
+
     def test_draw_normal_path(self, renderer):
         # Exercises the full draw() entry path (header/search/list/now_playing/footer).
         state = self._make_state()
