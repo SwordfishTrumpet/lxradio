@@ -571,6 +571,62 @@ class TestRadioAppLogic:
         app._toggle_favorite()
         assert app._status_msg == ""
 
+    def test_toggle_favorite_persistence_error_surfaces_status(self, app):
+        # Issue #8: Favorites._save() re-raises OSError; the main curses thread
+        # must contain it (status bar) instead of crashing the TUI.
+        s = Station("1", "A", "http://a", "", [], "MP3", 0, 0)
+        app._stations = [s]
+        app._cursor = 0
+        app._view = View.BROWSE
+        with patch("lxradio.favorites.os.replace", side_effect=OSError("disk full")):
+            result = app._tick(ord("f"))
+        assert result is False  # no exception escapes _tick()
+        assert "Could not save favourites" in app._status_msg
+        assert "disk full" in app._status_msg
+
+    def test_on_history_persistence_error_routes_to_on_error(self, app):
+        # Issue #8: a history-save failure on the metadata thread must surface
+        # via on_error (status bar) instead of being silently swallowed.
+        s = Station("1", "A", "http://a", "", [], "MP3", 0, 0)
+        app._station_cache["1"] = s
+        with patch("lxradio.history.os.replace", side_effect=OSError("disk full")):
+            app._on_history("1", "Song A")  # must not raise
+        assert "Could not save history" in app._status_msg
+        assert "disk full" in app._status_msg
+
+    def test_play_selected_history_persistence_error_no_crash(self, app):
+        # Issue #8: Player.play() invokes on_history synchronously on the main
+        # thread; a failing history save there must not propagate out of play().
+
+        s = Station("1", "A", "http://a", "", [], "MP3", 0, 0)
+        app._stations = [s]
+        app._cursor = 0
+        app._view = View.BROWSE
+
+        stop_reading = threading.Event()
+
+        class BlockingIter:
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                if stop_reading.wait(10):
+                    raise StopIteration
+                raise StopIteration
+
+        fake_proc = MagicMock()
+        fake_proc.stdout = BlockingIter()
+        with patch("shutil.which", return_value="/usr/bin/mpv"), patch(
+            "subprocess.Popen", return_value=fake_proc
+        ), patch("lxradio.app.report_click"), patch(
+            "lxradio.history.os.replace", side_effect=OSError("disk full")
+        ):
+            app._play_selected()  # must not raise
+        assert app._now_playing == s
+        assert "Could not save history" in app._status_msg
+        stop_reading.set()
+        app._player.stop()
+
     def test_on_metadata(self, app):
         app._song_title = ""
         app._status_msg = "Connecting to Jazz FM…"
