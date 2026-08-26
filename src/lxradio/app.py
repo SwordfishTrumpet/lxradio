@@ -331,8 +331,14 @@ class RadioApp:
         if not stations or self._cursor >= len(stations):
             return
         station = stations[self._cursor]
-        added = self._favorites.toggle(station)
-        self._status_msg = f"{'Added' if added else 'Removed'}: {station.name}"
+        try:
+            added = self._favorites.toggle(station)
+        except OSError as exc:
+            # Favorites._save() re-raises OSError by design (AGENTS.md); the
+            # curses main thread must contain it and surface it, never crash.
+            self._status_msg = f"Could not save favourites: {exc}"
+        else:
+            self._status_msg = f"{'Added' if added else 'Removed'}: {station.name}"
         self._dirty = True
 
     def _switch_view(self, view: View) -> None:
@@ -400,7 +406,14 @@ class RadioApp:
     def _on_history(self, station_id: str, song_title: str) -> None:
         station = self._find_station(station_id)
         if station:
-            self._history.add(station, song_title)
+            try:
+                self._history.add(station, song_title)
+            except OSError as exc:
+                # History._save() re-raises OSError by design; route it to
+                # on_error (status bar) on both the main thread (Player.play)
+                # and the metadata thread (_read_output) instead of letting the
+                # metadata thread swallow it silently (see AGENTS.md).
+                self._on_error(f"Could not save history: {exc}")
             self._history_view_cache = None
             self._history_timestamps_cache = None
 
