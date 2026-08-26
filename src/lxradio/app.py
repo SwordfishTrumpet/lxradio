@@ -251,6 +251,11 @@ class RadioApp:
             self._dirty = True
 
     def _cycle_sleep_timer(self) -> None:
+        # First-snapshot-wins (issue #17): capture the restore baseline BEFORE
+        # starting/cancelling anything, so an in-progress fade from a previous
+        # timer can never poison the new baseline with its own faded output.
+        if self._sleep_restore_volume is None:
+            self._sleep_restore_volume = self._player.get_volume()
         result = self._sleep_timer.cycle_preset()
         if result is None:
             self._sleep_timer.cancel()
@@ -259,7 +264,6 @@ class RadioApp:
         else:
             label, duration = result
             self._sleep_timer.start(duration)
-            self._sleep_restore_volume = self._player.get_volume()
             self._status_msg = f"Sleep timer: {label}"
         self._dirty = True
 

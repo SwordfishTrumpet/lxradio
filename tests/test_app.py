@@ -1019,6 +1019,45 @@ class TestRadioAppLogic:
         app._cancel_sleep_timer()
         assert app._player.get_volume() == 55
 
+    def test_cycle_preset_mid_fade_keeps_original_restore_baseline(self, app):
+        # Issue #17: cycling presets while a fade is in progress must not
+        # poison the restore baseline with the fade's own output volume.
+        app._player.set_volume(80)
+        app._cycle_sleep_timer()  # baseline snapshots 80
+        assert app._sleep_restore_volume == 80
+        app._player.set_volume(30)  # simulate fade having stepped down
+        app._cycle_sleep_timer()  # 15m -> 30m mid-fade
+        assert app._sleep_restore_volume == 80
+
+    def test_cancel_after_mid_fade_preset_cycle_restores_original(self, app):
+        app._player.set_volume(80)
+        app._cycle_sleep_timer()
+        app._player.set_volume(30)  # mid-fade
+        app._cycle_sleep_timer()
+        app._cancel_sleep_timer()
+        assert app._player.get_volume() == 80
+
+    def test_expire_after_mid_fade_preset_cycle_restores_original(self, app):
+        app._player.set_volume(80)
+        app._cycle_sleep_timer()
+        app._player.set_volume(30)  # mid-fade
+        app._cycle_sleep_timer()
+        app._on_sleep_expire()
+        assert app._player.get_volume() == 80
+
+    def test_play_after_mid_fade_preset_cycle_restores_original(self, app):
+        s = Station("1", "A", "http://a", "", [], "MP3", 0, 0)
+        app._stations = [s]
+        app._cursor = 0
+        app._view = View.BROWSE
+        app._player.set_volume(80)
+        app._cycle_sleep_timer()
+        app._player.set_volume(30)  # mid-fade
+        app._cycle_sleep_timer()
+        with patch("lxradio.app.report_click"), patch.object(app._player, "play", return_value=True):
+            app._play_selected()
+        assert app._player.get_volume() == 80
+
     def test_main_loop_quits_on_q(self, app):
         # Smoke test for the curses main loop: pressing q ends the loop and shuts down.
         with patch("lxradio.app.top_stations", return_value=[]), patch(
