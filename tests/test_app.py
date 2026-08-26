@@ -72,6 +72,17 @@ class TestHelpers:
 
 class TestRadioAppLogic:
     @pytest.fixture
+    def volume_capable(self, monkeypatch):
+        """Pin volume-control capability to True for a test.
+
+        The dispatcher gates volume keys behind Player.can_control_volume(),
+        which on Linux depends on pactl being installed on the machine (issue
+        #20). Without this pin the affected tests pass on macOS (_IS_MACOS
+        short-circuit) but no-op on runners without pactl.
+        """
+        monkeypatch.setattr("lxradio.player.Player.can_control_volume", lambda self: True)
+
+    @pytest.fixture
     def app(self, tmp_path, monkeypatch):
         test_file = tmp_path / "favorites.json"
         hist_file = tmp_path / "history.jsonl"
@@ -162,14 +173,14 @@ class TestRadioAppLogic:
         assert app._view == View.FAVORITES
         assert result is False
 
-    def test_handle_nav_key_m_mutes(self, app):
+    def test_handle_nav_key_m_mutes(self, app, volume_capable):
         app._player.set_volume(50)
         result = app._handle_nav_key(ord("m"))
         assert result is False
         assert app._player.is_muted()
         assert app._status_msg == "Muted"
 
-    def test_handle_nav_key_m_unmutes(self, app):
+    def test_handle_nav_key_m_unmutes(self, app, volume_capable):
         app._player.set_volume(50)
         app._player.toggle_mute()
         result = app._handle_nav_key(ord("m"))
@@ -299,35 +310,48 @@ class TestRadioAppLogic:
         assert result is False
         assert app._dirty is True
 
-    def test_handle_nav_key_plus(self, app):
+    def test_handle_nav_key_plus(self, app, volume_capable):
         app._player.set_volume(50)
         result = app._handle_nav_key(ord("+"))
         assert result is False
         assert app._player.get_volume() == 55
 
-    def test_handle_nav_key_equal(self, app):
+    def test_handle_nav_key_equal(self, app, volume_capable):
         app._player.set_volume(50)
         result = app._handle_nav_key(ord("="))
         assert result is False
         assert app._player.get_volume() == 55
 
-    def test_handle_nav_key_right(self, app):
+    def test_handle_nav_key_right(self, app, volume_capable):
         app._player.set_volume(50)
         result = app._handle_nav_key(curses.KEY_RIGHT)
         assert result is False
         assert app._player.get_volume() == 55
 
-    def test_handle_nav_key_minus(self, app):
+    def test_handle_nav_key_minus(self, app, volume_capable):
         app._player.set_volume(50)
         result = app._handle_nav_key(ord("-"))
         assert result is False
         assert app._player.get_volume() == 45
 
-    def test_handle_nav_key_left(self, app):
+    def test_handle_nav_key_left(self, app, volume_capable):
         app._player.set_volume(50)
         result = app._handle_nav_key(curses.KEY_LEFT)
         assert result is False
         assert app._player.get_volume() == 45
+
+    def test_volume_keys_noop_without_capability(self, app, monkeypatch):
+        """Without volume control (no pactl/IPC on Linux), keys must not change state.
+
+        Regression guard for issue #20: capability is pinned to False so this
+        is deterministic regardless of runner environment.
+        """
+        monkeypatch.setattr("lxradio.player.Player.can_control_volume", lambda self: False)
+        app._player.set_volume(50)
+        for key in (ord("+"), ord("="), ord("-"), ord("m")):
+            assert app._handle_nav_key(key) is False
+            assert app._player.get_volume() == 50
+            assert not app._player.is_muted()
 
     def test_handle_nav_key_space_stops(self, app):
         s = Station("1", "A", "http://a", "", [], "MP3", 0, 0)
@@ -777,7 +801,7 @@ class TestRadioAppLogic:
             assert app._tick(ord(" ")) is False
         assert app._status_msg == "Stopped"
 
-    def test_tick_mute_toggle(self, app):
+    def test_tick_mute_toggle(self, app, volume_capable):
         app._player.set_volume(50)
         assert app._tick(ord("m")) is False
         assert app._player.is_muted()
