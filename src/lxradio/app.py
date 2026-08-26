@@ -10,7 +10,15 @@ from .favorites import Favorites
 from .history import History
 from .key_dispatcher import make_default_dispatcher
 from .player import Player
-from .radio_browser import Station, report_click, search, search_by_tag, search_by_tags, top_stations
+from .radio_browser import (
+    Station,
+    cancel_pending_searches,
+    report_click,
+    search,
+    search_by_tag,
+    search_by_tags,
+    top_stations,
+)
 from .renderer import DrawState, Renderer
 from .sleep_timer import SleepTimer
 
@@ -466,6 +474,9 @@ class RadioApp:
         self._player.stop()
         with self._lock:
             self._stations_loader, self._loading = None, False
+        # Cancel queued/in-flight search futures so quitting never blocks the
+        # interpreter exit on the executor's non-daemon worker threads.
+        cancel_pending_searches()
 
     def _current_stations(self) -> list[Station]:
         if self._view == View.FAVORITES:

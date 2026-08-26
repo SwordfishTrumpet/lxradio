@@ -2,6 +2,7 @@
 
 import json
 import socket
+import threading
 import urllib.error
 from unittest.mock import MagicMock, patch
 
@@ -152,10 +153,17 @@ def _reset_dns_state():
     rb._cached_host = None
     rb._cached_at = 0.0
     rb._cached_failure = False
+    with rb._submissions_lock:
+        rb._pending_submissions.clear()
     yield
     rb._cached_host = None
     rb._cached_at = 0.0
     rb._cached_failure = False
+    with rb._submissions_lock:
+        pending = list(rb._pending_submissions)
+        rb._pending_submissions.clear()
+    for fut in pending:
+        fut.cancel()
 
 
 class TestGet:
@@ -465,6 +473,61 @@ class TestSearchFunctions:
         mock_name.assert_called_once_with("q", limit=10, offset=20)
         mock_tag.assert_called_once_with("q", limit=10, offset=20)
         mock_country.assert_called_once_with("q", limit=10, offset=20)
+
+
+class TestSearchExecutorShutdown:
+    def test_submissions_run_in_daemon_threads(self):
+        import lxradio.radio_browser as rb
+        created = []
+
+        class StubThread:
+            def __init__(self, target=None, name=None, daemon=None):
+                self.target, self.name, self.daemon = target, name, daemon
+                created.append(self)
+
+            def start(self):
+                pass  # never actually run the target
+
+        with patch("lxradio.radio_browser.threading.Thread", StubThread):
+            rb._submit_in_daemon_thread(lambda: [])
+        assert len(created) == 1
+        thread = created[0]
+        assert thread.daemon is True, "search workers must be daemon threads"
+        assert callable(thread.target)
+
+    def test_cancel_pending_searches_prevents_execution(self):
+        # Issue #15: work queued but not yet started must be cancellable on quit.
+        import lxradio.radio_browser as rb
+        executed = threading.Event()
+        created = []
+
+        class StubThread:
+            def __init__(self, target=None, name=None, daemon=None):
+                self.target, self.daemon = target, daemon
+                created.append(self)
+
+            def start(self):
+                pass  # queued forever: the thread never gets to run
+
+        with patch("lxradio.radio_browser.threading.Thread", StubThread):
+            fut = rb._submit_in_daemon_thread(executed.set)
+            assert len(created) == 1
+            rb.cancel_pending_searches()
+        assert fut.cancelled(), "unstarted submission must be cancelled"
+        for stub in created:
+            stub.target()  # a real thread would now bail out via set_running_or_notify_cancel
+        assert not executed.is_set(), "cancelled submission must never execute"
+        assert rb._pending_submissions == [], "registry must be cleared"
+
+    def test_search_works_after_cancel(self):
+        import lxradio.radio_browser as rb
+        rb.cancel_pending_searches()
+        with (
+            patch("lxradio.radio_browser.search_by_name", return_value=[]),
+            patch("lxradio.radio_browser.search_by_tag", return_value=[]),
+            patch("lxradio.radio_browser.search_by_country", return_value=[]),
+        ):
+            assert search("q") == []
 
 
 class TestClick:
