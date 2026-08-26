@@ -205,6 +205,80 @@ class TestGet:
             _get("/test")
         assert mock_urlopen.call_count == 1
 
+    @patch("lxradio.radio_browser.urllib.request.urlopen")
+    @patch("lxradio.radio_browser._resolve_host", return_value="primary.host")
+    def test_get_retries_non_json_response(self, mock_resolve, mock_urlopen):
+        # Issue #10: host 1 returns HTTP 200 with a non-JSON body; the
+        # remaining fallback hosts must still be attempted.
+        def side_effect(req, timeout):
+            mock_resp = MagicMock()
+            if "primary.host" in req.full_url:
+                mock_resp.read.return_value = b"<html>502 Bad Gateway</html>"
+            else:
+                mock_resp.read.return_value = json.dumps([{"id": 2}]).encode()
+            mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            return mock_resp
+
+        mock_urlopen.side_effect = side_effect
+        result = _get("/test")
+        assert result == [{"id": 2}]
+        assert mock_urlopen.call_count == 2
+
+    @patch("lxradio.radio_browser.urllib.request.urlopen")
+    @patch("lxradio.radio_browser._resolve_host", return_value="primary.host")
+    def test_get_all_hosts_non_json_raises(self, mock_resolve, mock_urlopen):
+        # Issue #10: when every host returns a non-JSON body, the error is
+        # raised only after all fallback hosts were attempted.
+        def side_effect(req, timeout):
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = b"<html>error</html>"
+            mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            return mock_resp
+
+        mock_urlopen.side_effect = side_effect
+        with pytest.raises(json.JSONDecodeError):
+            _get("/test")
+        assert mock_urlopen.call_count == 4
+
+    @patch("lxradio.radio_browser.urllib.request.urlopen")
+    @patch("lxradio.radio_browser._resolve_host", return_value="primary.host")
+    def test_get_retries_dict_shaped_response(self, mock_resolve, mock_urlopen):
+        # Issue #10: valid JSON but a dict (not a list) is a retryable host
+        # failure; a later host's valid list is used.
+        def side_effect(req, timeout):
+            mock_resp = MagicMock()
+            if "primary.host" in req.full_url:
+                mock_resp.read.return_value = json.dumps({"error": "envelope"}).encode()
+            else:
+                mock_resp.read.return_value = json.dumps([{"id": 3}]).encode()
+            mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            return mock_resp
+
+        mock_urlopen.side_effect = side_effect
+        result = _get("/test")
+        assert result == [{"id": 3}]
+        assert mock_urlopen.call_count == 2
+
+    @patch("lxradio.radio_browser.urllib.request.urlopen")
+    @patch("lxradio.radio_browser._resolve_host", return_value="primary.host")
+    def test_get_all_hosts_dict_payload_raises(self, mock_resolve, mock_urlopen):
+        # Issue #10: all hosts return a dict-shaped payload -> friendly error
+        # raised only after every host was attempted.
+        def side_effect(req, timeout):
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = json.dumps({"error": "envelope"}).encode()
+            mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            return mock_resp
+
+        mock_urlopen.side_effect = side_effect
+        with pytest.raises(ValueError, match="unexpected API response"):
+            _get("/test")
+        assert mock_urlopen.call_count == 4
+
 
 class TestSearchFunctions:
     @patch("lxradio.radio_browser._get")

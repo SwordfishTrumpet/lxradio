@@ -155,11 +155,20 @@ def _get(path: str, params: dict | None = None) -> list[dict]:
         )
         try:
             with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-                data: list[dict] = json.loads(resp.read().decode())
-                return data
-        except (urllib.error.URLError, TimeoutError) as exc:
+                data = json.loads(resp.read().decode())
+        except (urllib.error.URLError, TimeoutError, ValueError, TypeError) as exc:
+            # Network-layer AND content-layer failures are retryable host
+            # failures (issue #10): a non-JSON body (proxy interstitial,
+            # load-balancer error page) or undecodable payload must not bypass
+            # the remaining fallback hosts.
             last_exc = exc
             continue
+        if not isinstance(data, list):
+            # Valid JSON but the wrong shape (e.g. a dict error envelope):
+            # treat as a retryable host failure, raise only after all hosts fail.
+            last_exc = ValueError("unexpected API response")
+            continue
+        return data
     if last_exc is not None:
         raise last_exc
     # Unreachable: at least one host is always tried, and failures set last_exc.
