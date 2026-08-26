@@ -7,7 +7,7 @@ Thanks for your interest in contributing!
 No manual install step required — `uv` handles the environment automatically.
 
 ```bash
-git clone https://github.com/anomalyco/lxradio
+git clone https://github.com/SwordfishTrumpet/lxradio
 cd lxradio
 uv run lxradio
 ```

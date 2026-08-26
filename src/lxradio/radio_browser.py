@@ -149,7 +149,7 @@ def _get(path: str, params: dict | None = None) -> list[dict]:
         req = urllib.request.Request(
             url,
             headers={
-                "User-Agent": f"lxradio/{__version__} (github.com/anomalyco/lxradio)",
+                "User-Agent": f"lxradio/{__version__} (github.com/SwordfishTrumpet/lxradio)",
                 "Accept": "application/json",
             },
         )
@@ -266,7 +266,7 @@ def _click(path: str) -> None:
         req = urllib.request.Request(
             url,
             headers={
-                "User-Agent": f"lxradio/{__version__} (github.com/anomalyco/lxradio)",
+                "User-Agent": f"lxradio/{__version__} (github.com/SwordfishTrumpet/lxradio)",
             },
         )
         try:

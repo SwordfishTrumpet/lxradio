@@ -44,4 +44,4 @@ All notable changes to lxradio will be documented in this file.
 - Registration-driven keybindings with auto-generated footer
 
 [0.2.0]: https://github.com/SwordfishTrumpet/lxradio/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/anomalyco/lxradio/releases/tag/v0.1.0
+[0.1.0]: https://github.com/SwordfishTrumpet/lxradio/releases/tag/v0.1.0
