@@ -43,9 +43,15 @@ jobs:
       - name: Build package
         run: uv build
       - name: Install from wheel
-        run: uv pip install dist/*.whl
+        # Explicit venv: newer uv refuses `uv pip install` without an active
+        # environment, which silently broke this gate for weeks (issue #21).
+        run: |
+          uv venv
+          uv pip install --python .venv/bin/python dist/*.whl
       - name: Verify import
-        run: python -c "import lxradio; from lxradio.history import History; from lxradio.app import View; assert hasattr(View, 'HISTORY'), 'HISTORY view missing'"
+        # Must use the venv interpreter so we verify the installed wheel,
+        # not the runner's system Python.
+        run: .venv/bin/python -c "import lxradio; from lxradio.history import History; from lxradio.app import View; assert hasattr(View, 'HISTORY'), 'HISTORY view missing'"
 
   lint:
     runs-on: ubuntu-latest
