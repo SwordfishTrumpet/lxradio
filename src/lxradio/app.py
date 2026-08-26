@@ -75,6 +75,9 @@ class RadioApp:
         self._batch_size: int = 60
         self._last_click_id: str | None = None
         self._last_click_at: float = 0.0
+        # Bounded lookup cache mapping station id -> Station for metadata/history
+        # events; trimmed to _STATION_CACHE_MAX (issue #11). The currently
+        # playing station is never evicted (its history mapping depends on it).
         self._station_cache: dict[str, Station] = {}
         self._renderer: Renderer | None = None
         self._dispatcher = make_default_dispatcher()
@@ -85,6 +88,7 @@ class RadioApp:
         self._history_timestamps_cache: list[float] | None = None
 
     _CLICK_DEBOUNCE_SECS = 3.0
+    _STATION_CACHE_MAX = 500
 
     def run(self) -> None:
         curses.wrapper(self._main)
@@ -256,6 +260,25 @@ class RadioApp:
             self._player.set_volume(self._sleep_restore_volume)
             self._sleep_restore_volume = None
 
+    def _trim_station_cache(self) -> None:
+        """Bound ``_station_cache`` to ``_STATION_CACHE_MAX`` entries.
+
+        FIFO by insertion order; the currently playing station is skipped so
+        metadata/history lookups keep working for the live stream. Callers
+        either hold ``_lock`` (load-batch worker) or run on the main thread
+        (``_play_selected``).
+        """
+        overflow = len(self._station_cache) - self._STATION_CACHE_MAX
+        if overflow <= 0:
+            return
+        playing_id = self._now_playing.id if self._now_playing else None
+        for key in list(self._station_cache.keys()):
+            if overflow <= 0:
+                break
+            if key != playing_id:
+                self._station_cache.pop(key, None)
+                overflow -= 1
+
     def _space(self) -> None:
         stations = self._current_stations()
         if self._player.is_playing():
@@ -310,6 +333,7 @@ class RadioApp:
             return
         station = stations[self._cursor]
         self._station_cache[station.id] = station
+        self._trim_station_cache()
         self._sleep_timer.cancel()
         self._restore_volume_after_sleep()
         with self._lock:
@@ -383,6 +407,7 @@ class RadioApp:
                 self._stations.extend(new_stations)
                 for s in new_stations:
                     self._station_cache[s.id] = s
+                self._trim_station_cache()
                 self._stations_offset = offset + len(results)
                 self._stations_has_more = paginable and len(results) >= batch_size
                 self._loading, self._status_msg, self._dirty = False, status_msg, True
