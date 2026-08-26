@@ -67,7 +67,7 @@ A minimal, fast terminal TUI radio player. Browse and search thousands of intern
 - **App-Scoped Volume** — macOS uses mpv IPC for fully isolated volume control; Linux falls back to `pactl` when the IPC socket is unavailable
 - **Sleep Timer** — Set a countdown timer (15m → 30m → 60m → Off) that fades volume gracefully in the last 60 seconds
 - **Graceful Shutdown** — `SIGINT` / `SIGTERM` handlers cleanly terminate mpv child processes
-- **Heartbeat Detection** — Stale or dead streams are detected automatically
+- **Process-Based Playback State** — Playing/stopped state tracks the mpv process directly, so silent streams are never mistaken for dead ones
 - **Click Deduplication** — Rapid `Enter` presses on the same station are debounced to avoid duplicate API click-tracking requests
 - **Registration-Driven Keybindings** — Adding a new shortcut is a single line of registration; footer help text is auto-generated
 - **Multi-Instance Support** — IPC socket path includes the process ID (`/tmp/lxradio-mpv-{pid}.sock`), so multiple instances can run simultaneously without interfering
