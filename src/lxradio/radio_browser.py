@@ -1,4 +1,5 @@
 import concurrent.futures
+import contextlib
 import json
 import socket
 import threading
@@ -6,7 +7,9 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from lxradio import __version__
 
@@ -201,14 +204,51 @@ def search_by_name(query: str, limit: int = 60, offset: int = 0) -> list[Station
     return _search_by({"name": query}, limit, offset)
 
 
-_search_executor: concurrent.futures.ThreadPoolExecutor | None = None
+_submissions_lock = threading.Lock()
+_pending_submissions: list[concurrent.futures.Future] = []
 
 
-def _get_search_executor() -> concurrent.futures.ThreadPoolExecutor:
-    global _search_executor
-    if _search_executor is None:
-        _search_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
-    return _search_executor
+def _submit_in_daemon_thread(fn: Callable[[], Any]) -> concurrent.futures.Future:
+    """Run ``fn()`` in a fresh *daemon* thread, exposing the outcome as a Future.
+
+    Daemon threads are never joined at interpreter exit, unlike the worker
+    threads of ``ThreadPoolExecutor`` (joined via CPython's
+    ``concurrent.futures.thread._python_exit`` hook). This bounds time-from-
+    quit-to-exit to well under a second even when searches are stalled against
+    a slow network (issue #15).
+    """
+    fut: concurrent.futures.Future = concurrent.futures.Future()
+
+    def _run() -> None:
+        if not fut.set_running_or_notify_cancel():
+            return
+        try:
+            result = fn()
+        except BaseException as exc:  # surfaced to the caller via the future
+            fut.set_exception(exc)
+        else:
+            fut.set_result(result)
+        finally:
+            with _submissions_lock, contextlib.suppress(ValueError):
+                _pending_submissions.remove(fut)
+
+    with _submissions_lock:
+        _pending_submissions.append(fut)
+    threading.Thread(target=_run, name="lxradio-search", daemon=True).start()
+    return fut
+
+
+def cancel_pending_searches() -> None:
+    """Cancel queued-but-unstarted search work.
+
+    Called from ``RadioApp.shutdown()``. Already-running attempts are left to
+    finish or die with the process; because their worker threads are daemons,
+    neither blocks interpreter exit (issue #15).
+    """
+    with _submissions_lock:
+        pending, _pending_submissions[:] = list(_pending_submissions), []
+    for fut in pending:
+        fut.cancel()
 
 
 def search_by_country(country: str, limit: int = 60, offset: int = 0) -> list[Station]:
@@ -217,10 +257,9 @@ def search_by_country(country: str, limit: int = 60, offset: int = 0) -> list[St
 
 def search(query: str, limit: int = 100, offset: int = 0) -> list[Station]:
     """Broad search across station names, tags, and countries."""
-    executor = _get_search_executor()
-    future_name = executor.submit(search_by_name, query, limit=limit, offset=offset)
-    future_tag = executor.submit(search_by_tag, query, limit=limit, offset=offset)
-    future_country = executor.submit(search_by_country, query, limit=limit, offset=offset)
+    future_name = _submit_in_daemon_thread(lambda: search_by_name(query, limit=limit, offset=offset))
+    future_tag = _submit_in_daemon_thread(lambda: search_by_tag(query, limit=limit, offset=offset))
+    future_country = _submit_in_daemon_thread(lambda: search_by_country(query, limit=limit, offset=offset))
 
     sub_results: list[list[Station]] = []
     failed: list[Exception] = []

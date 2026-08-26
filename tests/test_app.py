@@ -667,6 +667,16 @@ class TestRadioAppLogic:
         assert app._stations_loader is None
         assert app._loading is False
 
+    def test_shutdown_cancels_searches(self, app):
+        # Issue #15: quitting must cancel queued search work so the process
+        # never blocks at interpreter exit on in-flight HTTP attempts.
+        with (
+            patch.object(app._player, "stop"),
+            patch("lxradio.app.cancel_pending_searches") as mock_cancel,
+        ):
+            app.shutdown()
+        mock_cancel.assert_called_once()
+
     def test_tick_quits_on_q(self, app):
         assert app._tick(ord("q")) is True
 
