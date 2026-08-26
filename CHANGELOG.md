@@ -2,6 +2,27 @@
 
 All notable changes to lxradio will be documented in this file.
 
+## [0.2.1] — 2026-08-26
+
+### Fixed
+
+- SIGINT/SIGTERM delivered while playback starts or a list loads no longer self-deadlock in the signal handler; cleanup now runs after the interrupted frame unwinds, so Ctrl-C always restores the terminal instead of hanging the process (#18).
+- Quitting the app no longer hangs for tens of seconds waiting on stalled search requests: search workers are daemon threads and pending work is cancelled at shutdown (#15).
+- Filesystem I/O failures (e.g. an unwritable config directory) surface as a status message instead of crashing the curses app (#8).
+- A malformed station record in an API page is skipped individually instead of discarding the entire result set (#9).
+- Non-JSON responses from one radio-browser mirror fall through to the fallback hosts instead of blanking results (#10).
+- The station metadata cache is bounded over long sessions instead of growing without limit (#11).
+- Non-ASCII search input is no longer silently discarded, via wide-character input handling and locale initialisation (#16).
+- Cycling sleep-timer presets mid-fade preserves the original volume-restore baseline, so cancelling never leaves the volume faded (#17).
+- The now-playing bar no longer lets volume display overwrite the sleep-timer countdown (#12).
+
+### Changed
+
+- Stale 'anomalyco' organization references corrected across SECURITY.md, CONTRIBUTING.md, CHANGELOG.md and the User-Agent (#13).
+- README no longer advertises the removed heartbeat-detection feature; CI now verifies Python 3.14, matching documented version support (#19).
+- CI test job is hermetic: volume-control tests pin capability explicitly rather than depending on `pactl` being installed on the runner (#20).
+- CI build job creates a virtualenv for the wheel-install smoke test and verifies imports with the venv interpreter (#21).
+
 ## [0.2.0] — 2026-08-18
 
 ### Added

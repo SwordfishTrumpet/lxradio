@@ -1,6 +1,6 @@
 [project]
 name = "lxradio"
-version = "0.2.0"
+version = "0.2.1"
 description = "A minimal, fast terminal radio player"
 readme = "README.md"
 requires-python = ">=3.10"
