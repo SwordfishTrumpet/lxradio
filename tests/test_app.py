@@ -483,6 +483,20 @@ class TestRadioAppLogic:
         time.sleep(0.1)
         assert "Connection error:" in app._status_msg
 
+    def test_load_batch_malformed_payload_degrades_gracefully(self, app):
+        # Issue #9 DoD: a dict-shaped (non-list) API payload raises ValueError
+        # from the mapping layer; _load_batch must surface a friendly status
+        # and never leave the app stuck loading or blank pagination state.
+        app._scr.getmaxyx.return_value = (24, 80)
+        app._start_load(lambda offset: [])
+        app._stations_has_more = True
+        with patch.object(app, "_stations_loader", side_effect=ValueError("unexpected API response")):
+            app._load_batch(0)
+        time.sleep(0.1)
+        assert "unexpected API response" in app._status_msg
+        assert app._loading is False
+        assert app._dirty is True
+
     def test_maybe_load_more_triggers(self, app):
         app._scr.getmaxyx.return_value = (24, 80)
         stations = [Station(str(i), f"S{i}", f"http://{i}", "", [], "MP3", 0, 0) for i in range(30)]

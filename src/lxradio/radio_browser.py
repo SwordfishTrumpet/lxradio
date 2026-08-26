@@ -26,7 +26,11 @@ class Station:
     @classmethod
     def from_api(cls, data: dict) -> "Station":
         raw_tags = data.get("tags", "") or ""
-        tags = [t.strip() for t in raw_tags.split(",") if t.strip()]
+        if isinstance(raw_tags, str):
+            tags = [t.strip() for t in raw_tags.split(",") if t.strip()]
+        else:
+            # Some community entries deliver tags as a JSON list instead of a string.
+            tags = [str(t).strip() for t in raw_tags if t and str(t).strip()]
         return cls(
             id=data.get("stationuuid", ""),
             name=(data.get("name") or "Unknown").strip(),
@@ -34,8 +38,8 @@ class Station:
             country=(data.get("country") or "").strip(),
             tags=tags,
             codec=(data.get("codec") or "?").upper(),
-            bitrate=int(data.get("bitrate") or 0),
-            votes=int(data.get("votes") or 0),
+            bitrate=_safe_int(data.get("bitrate")),
+            votes=_safe_int(data.get("votes")),
             favicon=data.get("favicon") or "",
         )
 
@@ -58,6 +62,43 @@ _FALLBACK_HOSTS = [
 _TIMEOUT = 8
 _DNS_CACHE_TTL = 300
 _DNS_FAILURE_TTL = 30
+
+
+def _safe_int(value: object) -> int:
+    """Coerce an API value to an int, tolerating non-numeric or missing values."""
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value)
+    try:
+        return int(str(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _stations_from_data(data: object) -> list[Station]:
+    """Map an API payload to Station objects, skipping malformed records.
+
+    A single dirty record (non-numeric bitrate, list-shaped tags, a non-dict
+    item) must never blank the whole page (issue #9), and a playable record
+    that only has ``url`` (no ``url_resolved``) must not be dropped. A
+    non-list payload raises a clear error so the caller surfaces it as a
+    friendly status instead of showing a silently empty list.
+    """
+    if not isinstance(data, list):
+        raise ValueError("unexpected API response")
+    stations: list[Station] = []
+    for record in data:
+        if not isinstance(record, dict):
+            continue
+        if not (record.get("url_resolved") or record.get("url")):
+            continue
+        try:
+            stations.append(Station.from_api(record))
+        except (KeyError, TypeError, ValueError, AttributeError):
+            # Per-record tolerance: skip only the bad record.
+            continue
+    return stations
 
 _cached_host: str | None = None
 _cached_at: float = 0.0
@@ -130,7 +171,7 @@ def top_stations(limit: int = 60, offset: int = 0) -> list[Station]:
         "/stations/topvote",
         {"limit": limit, "offset": offset, "hidebroken": "true"},
     )
-    return [Station.from_api(d) for d in data if d.get("url_resolved")]
+    return _stations_from_data(data)
 
 
 def _search_by(params: dict, limit: int, offset: int) -> list[Station]:
@@ -144,7 +185,7 @@ def _search_by(params: dict, limit: int, offset: int) -> list[Station]:
     }
     full.update(params)
     data = _get("/stations/search", full)
-    return [Station.from_api(d) for d in data if d.get("url_resolved")]
+    return _stations_from_data(data)
 
 
 def search_by_name(query: str, limit: int = 60, offset: int = 0) -> list[Station]:
@@ -172,14 +213,22 @@ def search(query: str, limit: int = 100, offset: int = 0) -> list[Station]:
     future_tag = executor.submit(search_by_tag, query, limit=limit, offset=offset)
     future_country = executor.submit(search_by_country, query, limit=limit, offset=offset)
 
-    name_results = future_name.result()
-    tag_results = future_tag.result()
-    country_results = future_country.result()
+    sub_results: list[list[Station]] = []
+    failed: list[Exception] = []
+    for future in (future_name, future_tag, future_country):
+        try:
+            sub_results.append(future.result())
+        except Exception as exc:
+            # A failing sub-query must not discard the successful ones; only if
+            # every sub-query fails do we surface the error to the caller.
+            failed.append(exc)
+    if len(failed) == 3:
+        raise failed[-1]
 
     seen: set[str] = set()
     merged: list[Station] = []
 
-    for station in name_results + tag_results + country_results:
+    for station in [s for sub in sub_results for s in sub]:
         if station.id not in seen:
             seen.add(station.id)
             merged.append(station)
