@@ -380,6 +380,47 @@ class TestRadioAppLogic:
         assert result is False
         assert app._query == "jazz"
 
+    def test_handle_search_key_nonascii_input(self, app):
+        # Issue #16: multi-byte UTF-8 characters must not be silently dropped.
+        app._search_mode = True
+        for ch in "Café Jazz":
+            app._handle_search_key(ch)
+        assert app._query == "Café Jazz"
+
+        app._query = ""
+        for ch in "Джаз":
+            app._handle_search_key(ch)
+        assert app._query == "Джаз"
+
+        app._query = ""
+        for ch in "ジャズ":
+            app._handle_search_key(ch)
+        assert app._query == "ジャズ"
+
+    def test_handle_search_key_enter_submits_nonascii_query(self, app):
+        # Issue #16: the full non-ASCII query must reach the search loader.
+        with patch("lxradio.app.search") as mock_search:
+            mock_search.return_value = []
+            app._search_mode = True
+            app._query = "música brasileña"
+            app._handle_search_key(10)  # Enter
+            mock_search.assert_called_once_with("música brasileña", limit=28, offset=0)
+
+    def test_handle_search_key_ignores_unprintable_str(self, app):
+        app._search_mode = True
+        app._query = "jazz"
+        app._handle_search_key("\x00")  # control character delivered as str
+        assert app._query == "jazz"
+
+    def test_tick_widechar_in_search_mode_appends(self, app):
+        app._search_mode = True
+        app._tick("é")
+        assert app._query == "é"
+
+    def test_tick_widechar_in_nav_mode_maps_to_binding(self, app):
+        app._tick("/")  # enters search mode like ord('/') would
+        assert app._search_mode is True
+
     def test_play_selected_dedupes_clicks(self, app):
         s = Station("1", "A", "http://a", "", [], "MP3", 0, 0)
         app._stations = [s]
@@ -984,9 +1025,9 @@ class TestRadioAppLogic:
             "lxradio.app.Renderer"
         ) as mock_renderer_cls, patch.object(app._player, "stop") as mock_stop:
             mock_renderer_cls.return_value = MagicMock()
-            app._scr.getch.side_effect = [ord("q")]
+            app._scr.get_wch.side_effect = [ord("q")]
             app._main(app._scr)
-            assert app._scr.getch.call_count >= 1
+            assert app._scr.get_wch.call_count >= 1
             mock_stop.assert_called_once()
 
     def test_run_wraps_main(self, app):

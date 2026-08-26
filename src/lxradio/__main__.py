@@ -1,3 +1,5 @@
+import contextlib
+import locale
 import logging
 import signal
 
@@ -6,6 +8,10 @@ from .app import RadioApp
 
 def main() -> None:
     logging.basicConfig(level=logging.WARNING, format="%(name)s: %(levelname)s: %(message)s")
+    with contextlib.suppress(locale.Error):
+        # Required by the curses documentation for proper (wide-character)
+        # Unicode handling; harmless if it fails (issue #16).
+        locale.setlocale(locale.LC_ALL, "")
     app = RadioApp()
 
     def _signal_handler(signum, frame):
