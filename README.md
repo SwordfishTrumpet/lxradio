@@ -227,6 +227,7 @@ Pressing `Tab` cycles through three distinct views:
 - **Search by tag** — Prefix with `tag:` to search by a single tag, e.g. `tag:jazz`
 - **Multi-tag search** — Use commas for multi-tag search, e.g. `tag:rock,classic`
 - **Paginated results** — Scroll down to load additional results from the API
+- **Unicode support** — Search works with non-ASCII characters (accents, Cyrillic, CJK, …), e.g. `Café Jazz` or `tag:música`
 
 ---
 

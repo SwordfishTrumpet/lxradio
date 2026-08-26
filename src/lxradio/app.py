@@ -111,17 +111,25 @@ class RadioApp:
             if self._dirty:
                 self._renderer.draw(self._build_draw_state())
                 self._dirty = False
-            key = stdscr.getch()
+            key: int | str = stdscr.get_wch()
             if self._tick(key):
                 break
         self.shutdown()
 
-    def _tick(self, key: int) -> bool:
+    def _tick(self, key: int | str) -> bool:
         if key == -1:
             if self._loading:
                 self._spinner_i += 1
                 self._dirty = True
             return False
+        if isinstance(key, str):
+            if not key.isprintable():
+                return False
+            # Wide-character input: in search mode append the character itself;
+            # otherwise map it onto the single-char binding registry via its
+            # ordinal (issue #16).
+            quit_ = self._handle_search_key(key) if self._search_mode else self._handle_nav_key(ord(key))
+            return bool(quit_)
         quit_ = self._handle_search_key(key) if self._search_mode else self._handle_nav_key(key)
         return bool(quit_)
 
@@ -301,7 +309,7 @@ class RadioApp:
         else:
             self._status_msg = "No station selected"
 
-    def _handle_search_key(self, key: int) -> bool:
+    def _handle_search_key(self, key: int | str) -> bool:
         if key == 27:
             self._search_mode = False
             self._query = ""
@@ -330,6 +338,9 @@ class RadioApp:
                 )
         elif key in (curses.KEY_BACKSPACE, 127, 8):
             self._query = self._query[:-1]
+        elif isinstance(key, str):
+            if key.isprintable():  # any printable character, incl. non-ASCII (issue #16)
+                self._query += key
         elif 32 <= key < 127:
             self._query += chr(key)
         self._dirty = True
