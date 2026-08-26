@@ -893,6 +893,42 @@ class TestRadioAppLogic:
         time.sleep(0.2)
         assert app._stations == []
 
+    def test_station_cache_capped(self, app):
+        # Issue #11: _station_cache must never grow past the cap, even when
+        # many batches of stations are loaded.
+        app._scr.getmaxyx.return_value = (24, 80)
+        app._start_load(lambda offset: [])
+        app._STATION_CACHE_MAX = 10
+        batch = [
+            Station(str(i), f"S{i}", "http://a", "", [], "MP3", 0, 0) for i in range(6)
+        ]
+        app._stations_loader = lambda offset: batch
+        for offset in range(0, 36, 6):  # 6 batches -> 36 stations cached total
+            app._load_batch(offset)
+        time.sleep(0.3)
+        assert len(app._station_cache) <= app._STATION_CACHE_MAX
+
+    def test_station_cache_keeps_playing_station(self, app):
+        # Issue #11: the currently playing station must survive eviction.
+        app._STATION_CACHE_MAX = 3
+        playing = Station("play", "Playing", "http://p", "", [], "MP3", 0, 0)
+        app._now_playing = playing
+        app._station_cache = {"play": playing}
+        for i in range(6):
+            app._station_cache[f"evict{i}"] = Station(f"evict{i}", f"S{i}", "http://a", "", [], "MP3", 0, 0)
+        app._trim_station_cache()
+        assert "play" in app._station_cache
+        assert len(app._station_cache) <= 3
+
+    def test_find_station_resolves_from_current_view_after_eviction(self, app):
+        # Issue #11 DoD: a station evicted from the cache is still resolvable
+        # through the current view (no behavioral regression in _find_station).
+        s = Station("1", "A", "http://a", "", [], "MP3", 0, 0)
+        app._stations = [s]
+        app._view = View.BROWSE
+        app._station_cache = {}  # evicted
+        assert app._find_station("1") is s
+
     def test_start_load_switches_to_browse(self, app):
         # BUG-4: searching from FAVORITES must switch to the BROWSE view so
         # results are actually displayed.
