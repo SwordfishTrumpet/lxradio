@@ -69,6 +69,32 @@ class TestStation:
         assert s.votes == 0
         assert s.tags == []
 
+    def test_from_api_non_numeric_bitrate(self):
+        # Issue #9: community data may deliver bitrate as a non-numeric string.
+        data = {"stationuuid": "1", "name": "A", "url_resolved": "http://a", "bitrate": "N/A"}
+        s = Station.from_api(data)
+        assert s.bitrate == 0
+        assert s.url == "http://a"
+
+    def test_from_api_bitrate_with_unit(self):
+        data = {"stationuuid": "1", "name": "A", "url_resolved": "http://a", "bitrate": "128 kbps"}
+        assert Station.from_api(data).bitrate == 0
+
+    def test_from_api_tags_as_list(self):
+        # Issue #9: tags may arrive as a JSON list rather than a comma string.
+        data = {
+            "stationuuid": "1",
+            "name": "A",
+            "url_resolved": "http://a",
+            "tags": ["rock", "pop"],
+        }
+        s = Station.from_api(data)
+        assert s.tags == ["rock", "pop"]
+
+    def test_from_api_votes_non_numeric(self):
+        data = {"stationuuid": "1", "name": "A", "url_resolved": "http://a", "votes": "lots"}
+        assert Station.from_api(data).votes == 0
+
     def test_tag_str(self):
         s = Station("1", "X", "http://x", "", ["a", "b"], "MP3", 0, 0)
         assert s.tag_str() == "a, b"
@@ -192,6 +218,51 @@ class TestSearchFunctions:
         mock_get.assert_called_once_with("/stations/topvote", {"limit": 10, "offset": 0, "hidebroken": "true"})
 
     @patch("lxradio.radio_browser._get")
+    def test_top_stations_skips_malformed_record(self, mock_get):
+        # Issue #9: one dirty record (bad bitrate / list tags) must not blank
+        # the whole page; the valid records still come through.
+        mock_get.return_value = [
+            {"stationuuid": "1", "name": "Good", "url_resolved": "http://good", "tags": "jazz", "bitrate": 128, "votes": 5},
+            {"stationuuid": "2", "name": "Dirty", "url_resolved": "http://dirty", "tags": "rock", "bitrate": "N/A", "votes": 1},
+            {"stationuuid": "3", "name": "Listy", "url_resolved": "http://listy", "tags": ["pop"], "bitrate": 64, "votes": 2},
+            {"stationuuid": "4", "name": "NoUrl", "url_resolved": "", "tags": "x", "bitrate": 0, "votes": 0},
+        ]
+        result = top_stations(limit=10)
+        ids = [s.id for s in result]
+        assert ids == ["1", "2", "3"]
+
+    @patch("lxradio.radio_browser._get")
+    def test_top_stations_keeps_url_only_record(self, mock_get):
+        # Issue #9 comment: a record with only ``url`` (no ``url_resolved``) is
+        # playable via from_api's fallback and must not be filtered out.
+        mock_get.return_value = [
+            {"stationuuid": "1", "name": "A", "url_resolved": "http://resolved", "tags": ""},
+            {"stationuuid": "2", "name": "B", "url_resolved": "", "url": "http://direct", "tags": ""},
+        ]
+        result = top_stations(limit=10)
+        assert [s.id for s in result] == ["1", "2"]
+        assert result[1].url == "http://direct"
+
+    @patch("lxradio.radio_browser._get")
+    def test_top_stations_skips_non_dict_items(self, mock_get):
+        mock_get.return_value = [
+            {"stationuuid": "1", "name": "A", "url_resolved": "http://a", "tags": ""},
+            "not-a-record",
+            {"stationuuid": "2", "name": "B", "url_resolved": "http://b", "tags": ""},
+        ]
+        result = top_stations(limit=10)
+        assert [s.id for s in result] == ["1", "2"]
+
+    @patch("lxradio.radio_browser._get")
+    def test_top_stations_dict_payload_raises_clear_error(self, mock_get):
+        # Issue #9 DoD: a dict-shaped (non-list) JSON response must degrade to a
+        # clear error (surfaced by _load_batch as a friendly status), not a
+        # silently empty list.
+        mock_get.return_value = {"error": "envelope"}
+        with pytest.raises(ValueError, match="unexpected API response"):
+            top_stations(limit=10)
+
+    @patch("lxradio.radio_browser._get")
     def test_search_by_name(self, mock_get):
         mock_get.return_value = []
         search_by_name("jazz", limit=10, offset=20)
@@ -272,6 +343,45 @@ class TestSearchFunctions:
         mock_name.assert_called_once_with("q", limit=100, offset=0)
         mock_tag.assert_called_once_with("q", limit=100, offset=0)
         mock_country.assert_called_once_with("q", limit=100, offset=0)
+
+    @patch("lxradio.radio_browser.search_by_name")
+    @patch("lxradio.radio_browser.search_by_tag")
+    @patch("lxradio.radio_browser.search_by_country")
+    def test_search_partial_subquery_failure(self, mock_country, mock_tag, mock_name):
+        # Issue #9: one failing sub-query must not discard the other two's results.
+        s1 = Station("1", "A", "http://a", "", [], "MP3", 128, 10)
+        s2 = Station("2", "B", "http://b", "", [], "MP3", 128, 5)
+        mock_name.return_value = [s1]
+        mock_tag.side_effect = ValueError("bad tag query")
+        mock_country.return_value = [s2]
+        result = search("rock", limit=10)
+        ids = [s.id for s in result]
+        assert ids == ["1", "2"]
+
+    @patch("lxradio.radio_browser.search_by_name")
+    @patch("lxradio.radio_browser.search_by_tag")
+    @patch("lxradio.radio_browser.search_by_country")
+    def test_search_all_subqueries_fail_raises(self, mock_country, mock_tag, mock_name):
+        # Issue #9: when every sub-query fails, the error must still surface to
+        # the caller (so _load_batch shows a friendly status instead of an
+        # empty result list).
+        exc = urllib.error.URLError("network down")
+        mock_name.side_effect = exc
+        mock_tag.side_effect = exc
+        mock_country.side_effect = exc
+        with pytest.raises(urllib.error.URLError):
+            search("rock", limit=10)
+
+    @patch("lxradio.radio_browser.search_by_name")
+    @patch("lxradio.radio_browser.search_by_tag")
+    @patch("lxradio.radio_browser.search_by_country")
+    def test_search_two_fail_one_succeeds(self, mock_country, mock_tag, mock_name):
+        s1 = Station("1", "A", "http://a", "", [], "MP3", 128, 10)
+        mock_name.side_effect = TimeoutError("timeout")
+        mock_tag.side_effect = TimeoutError("timeout")
+        mock_country.return_value = [s1]
+        result = search("rock", limit=10)
+        assert [s.id for s in result] == ["1"]
 
     @patch("lxradio.radio_browser.search_by_name")
     @patch("lxradio.radio_browser.search_by_tag")
