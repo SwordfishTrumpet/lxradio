@@ -140,8 +140,11 @@ class Renderer:
         curses.use_default_colors()
         bg = -1
 
-        curses.init_pair(C.NORMAL, curses.COLOR_WHITE, bg)
-        curses.init_pair(C.DIM, curses.COLOR_WHITE, bg)
+        # Body text uses the terminal default foreground (-1) so the station
+        # list stays legible on light themes; explicit colours are only used
+        # for accents or where the background is pinned too (issue #26).
+        curses.init_pair(C.NORMAL, -1, bg)
+        curses.init_pair(C.DIM, -1, bg)
         curses.init_pair(C.ACCENT, curses.COLOR_CYAN, bg)
         curses.init_pair(C.PLAYING, curses.COLOR_GREEN, bg)
         curses.init_pair(C.HEADER, curses.COLOR_BLACK, curses.COLOR_CYAN)
