@@ -9,7 +9,9 @@ import subprocess
 import sys
 import threading
 from collections.abc import Callable
+from pathlib import Path
 
+from . import _CONFIG_DIR
 from .radio_browser import Station
 
 _ICY_RE = re.compile(r"icy-title:\s*(.+)", re.IGNORECASE)
@@ -31,6 +33,36 @@ def _reset_pactl_cache() -> None:
     """Reset the pactl cache. Used only in tests."""
     global _PACTL_AVAILABLE
     _PACTL_AVAILABLE = None
+
+
+# AF_UNIX sun_path limit is 108 bytes on Linux and 104 on macOS/BSD; stay under both.
+_SUN_PATH_MAX = 104
+
+
+def _ipc_socket_path() -> str | None:
+    """Return a private path for the mpv IPC socket, or None if none fits.
+
+    The mpv IPC socket is an unauthenticated command channel: any local process
+    that can connect can drive mpv, including commands that spawn programs
+    (issue #22). It must therefore live in a directory other users cannot
+    reach — never directly in the world-writable /tmp. Preferred locations are
+    the per-user runtime directory ($XDG_RUNTIME_DIR on Linux, $TMPDIR on
+    macOS, both private by platform contract), falling back to a locked-down
+    subdirectory of the lxradio config dir.
+    """
+    base = os.environ.get("TMPDIR" if _IS_MACOS else "XDG_RUNTIME_DIR")
+    candidates = [Path(base) / "lxradio"] if base else []
+    candidates.append(_CONFIG_DIR / "run")
+    for d in candidates:
+        try:
+            d.mkdir(mode=0o700, parents=True, exist_ok=True)
+            os.chmod(d, 0o700)
+        except OSError:
+            continue
+        path = str(d / f"mpv-{os.getpid()}.sock")
+        if len(path.encode()) < _SUN_PATH_MAX:
+            return path
+    return None
 
 
 class Player:
@@ -62,9 +94,10 @@ class Player:
                 self._on_error("mpv not found in PATH")
             return False
         self.stop()
-        self._ipc_socket = f"/tmp/lxradio-mpv-{os.getpid()}.sock"
-        with contextlib.suppress(OSError):
-            os.unlink(self._ipc_socket)
+        self._ipc_socket = _ipc_socket_path()
+        if self._ipc_socket:
+            with contextlib.suppress(OSError):
+                os.unlink(self._ipc_socket)
         cmd = [
             "mpv",
             "--no-video",
@@ -73,9 +106,10 @@ class Player:
             f"--volume={self._volume}",
             "--msg-level=all=no,stream=info",
             "--display-tags=icy-title,title",
-            f"--input-ipc-server={self._ipc_socket}",
-            station.url,
         ]
+        if self._ipc_socket:
+            cmd.append(f"--input-ipc-server={self._ipc_socket}")
+        cmd.append(station.url)
         try:
             with self._lock:
                 self._proc = subprocess.Popen(
