@@ -3,16 +3,28 @@
 import contextlib
 import io
 import os
+import shutil
 import signal
 import subprocess
+import tempfile
 import threading
 import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from lxradio.player import Player
 from lxradio.radio_browser import Station
+
+
+@pytest.fixture
+def short_tmp():
+    """A short private base dir: pytest's tmp_path is too deep for AF_UNIX
+    paths on macOS (104-byte sun_path limit)."""
+    d = tempfile.mkdtemp(prefix="lxr-", dir="/tmp")  # not $TMPDIR: too deep on macOS
+    yield Path(d)
+    shutil.rmtree(d, ignore_errors=True)
 
 
 class TestPlayer:
@@ -115,7 +127,9 @@ class TestPlayer:
         on_error.assert_called_once_with("Failed to start mpv: Too many open files")
         assert result is False
 
-    def test_play_returns_true_on_success(self):
+    def test_play_returns_true_on_success(self, monkeypatch, short_tmp):
+        monkeypatch.setenv("TMPDIR", str(short_tmp))
+        monkeypatch.setenv("XDG_RUNTIME_DIR", str(short_tmp))
         p = Player()
         fake_proc = MagicMock()
         # Use an event-based iterator so the thread can be interrupted promptly
@@ -130,15 +144,83 @@ class TestPlayer:
         fake_proc.stdout = BlockingIter()
         with patch("shutil.which", return_value="/usr/bin/mpv"), patch(
             "subprocess.Popen", return_value=fake_proc
-        ):
+        ) as mock_popen:
             result = p.play(self._station())
         assert result is True
-        assert p._ipc_socket == f"/tmp/lxradio-mpv-{os.getpid()}.sock"
+        # The IPC socket lives in a private (0700) per-user directory (issue #22).
+        assert p._ipc_socket == str(short_tmp / "lxradio" / f"mpv-{os.getpid()}.sock")
+        assert (os.stat(os.path.dirname(p._ipc_socket)).st_mode & 0o777) == 0o700
+        cmd = mock_popen.call_args[0][0]
+        assert f"--input-ipc-server={p._ipc_socket}" in cmd
         assert p._metadata_thread is not None
         assert isinstance(p._metadata_thread, type(threading.Thread()))
         assert p._metadata_thread.is_alive()
         _stop_event.set()
         p.stop()
+
+    def test_ipc_socket_path_uses_private_dir_with_0700(self, monkeypatch, short_tmp):
+        # Issue #22: the socket is an unauthenticated command channel into mpv;
+        # its directory must be unreachable by other local users.
+        monkeypatch.setenv("TMPDIR", str(short_tmp))
+        monkeypatch.setenv("XDG_RUNTIME_DIR", str(short_tmp))
+        from lxradio.player import _ipc_socket_path
+        path = _ipc_socket_path()
+        assert path is not None
+        d = os.path.dirname(path)
+        assert d == str(short_tmp / "lxradio")
+        assert (os.stat(d).st_mode & 0o777) == 0o700
+
+    def test_ipc_socket_path_falls_back_to_config_dir(self, monkeypatch, short_tmp):
+        monkeypatch.delenv("TMPDIR", raising=False)
+        monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+        monkeypatch.setattr("lxradio.player._CONFIG_DIR", short_tmp / "cfg")
+        from lxradio.player import _ipc_socket_path
+        path = _ipc_socket_path()
+        assert path is not None
+        d = short_tmp / "cfg" / "run"
+        assert os.path.dirname(path) == str(d)
+        assert (os.stat(d).st_mode & 0o777) == 0o700
+
+    def test_ipc_socket_path_skips_uncreatable_runtime_dir(self, monkeypatch, short_tmp):
+        # If the runtime dir cannot be created (permissions, read-only mount),
+        # fall back to the config dir instead of failing playback (issue #22).
+        monkeypatch.setenv("TMPDIR", str(short_tmp))
+        monkeypatch.setenv("XDG_RUNTIME_DIR", str(short_tmp))
+        monkeypatch.setattr("lxradio.player._CONFIG_DIR", short_tmp / "cfg")
+        real_mkdir = Path.mkdir
+        def fake_mkdir(self, *args, **kwargs):
+            if str(self).startswith(str(short_tmp / "lxradio")):
+                raise OSError("read-only file system")
+            return real_mkdir(self, *args, **kwargs)
+        monkeypatch.setattr(Path, "mkdir", fake_mkdir)
+        from lxradio.player import _ipc_socket_path
+        path = _ipc_socket_path()
+        assert path is not None
+        assert os.path.dirname(path) == str(short_tmp / "cfg" / "run")
+
+    def test_ipc_socket_path_none_when_every_path_too_long(self, monkeypatch, tmp_path):
+        # AF_UNIX sun_path is limited (104 bytes on macOS); a deeply nested
+        # config dir must yield None instead of a path mpv cannot bind.
+        monkeypatch.delenv("TMPDIR", raising=False)
+        monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+        deep = tmp_path / ("d" * 60) / ("e" * 60)
+        monkeypatch.setattr("lxradio.player._CONFIG_DIR", deep)
+        from lxradio.player import _ipc_socket_path
+        assert _ipc_socket_path() is None
+
+    def test_play_without_ipc_when_no_private_dir(self, monkeypatch):
+        p = Player()
+        fake_proc = MagicMock()
+        fake_proc.stdout = iter([])
+        monkeypatch.setattr("lxradio.player._ipc_socket_path", lambda: None)
+        with patch("shutil.which", return_value="/usr/bin/mpv"), patch(
+            "subprocess.Popen", return_value=fake_proc
+        ) as mock_popen:
+            result = p.play(self._station())
+        assert result is True
+        assert p._ipc_socket is None
+        cmd = mock_popen.call_args[0][0]
+        assert not any(a.startswith("--input-ipc-server") for a in cmd)
 
     def test_stop_joins_reader_thread(self):
         p = Player()

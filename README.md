@@ -70,7 +70,7 @@ A minimal, fast terminal TUI radio player. Browse and search thousands of intern
 - **Process-Based Playback State** — Playing/stopped state tracks the mpv process directly, so silent streams are never mistaken for dead ones
 - **Click Deduplication** — Rapid `Enter` presses on the same station are debounced to avoid duplicate API click-tracking requests
 - **Registration-Driven Keybindings** — Adding a new shortcut is a single line of registration; footer help text is auto-generated
-- **Multi-Instance Support** — IPC socket path includes the process ID (`/tmp/lxradio-mpv-{pid}.sock`), so multiple instances can run simultaneously without interfering
+- **Multi-Instance Support** — The IPC socket path includes the process ID, so multiple instances can run simultaneously without interfering. The socket lives in a private per-user directory (`$XDG_RUNTIME_DIR/lxradio` on Linux, `$TMPDIR/lxradio` on macOS, both mode 0700), so other accounts on a shared machine cannot send commands to your player
 
 ---
 
