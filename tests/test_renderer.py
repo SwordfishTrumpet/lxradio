@@ -8,6 +8,7 @@ import pytest
 from lxradio.radio_browser import Station
 from lxradio.renderer import (
     _SPINNER,
+    C,
     DrawState,
     Renderer,
     _safe_addstr,
@@ -261,6 +262,16 @@ class TestRenderer:
             assert mock_curses.start_color.call_count >= 1
             assert mock_curses.use_default_colors.call_count >= 1
             assert mock_curses.init_pair.call_count >= 11
+
+    def test_setup_colors_body_text_uses_default_foreground(self):
+        # Issue #26: white-on-default is invisible on light terminal themes;
+        # the pairs that render body text must use the default foreground (-1).
+        with patch("lxradio.renderer.curses") as mock_curses:
+            r = Renderer(MagicMock())
+            r._setup_colors()
+            pairs = {c.args[0]: (c.args[1], c.args[2]) for c in mock_curses.init_pair.call_args_list}
+        assert pairs[C.NORMAL] == (-1, -1)
+        assert pairs[C.DIM] == (-1, -1)
 
     def test_history_row_shows_timestamp(self, renderer):
         s = Station("1", "A", "http://a", "US", ["jazz"], "MP3", 128, 10)
