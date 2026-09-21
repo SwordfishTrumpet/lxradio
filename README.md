@@ -59,8 +59,8 @@ A minimal, fast terminal TUI radio player. Browse and search thousands of intern
 ## Features
 
 - **Browse & Search** — Explore top-voted stations or search by name, tag, or country
-- **Parallel Search** — Free-text queries hit the `name`, `tag`, and `country` endpoints concurrently via `ThreadPoolExecutor(max_workers=2)`, cutting worst-case latency from ~24s (3 sequential calls) to ~16s
-- **Paginated Results** — Infinite scroll loading for both browse and search views
+- **Parallel Search** — Free-text queries hit the `name`, `tag`, and `country` endpoints concurrently in daemon threads, cutting worst-case latency from ~24s (3 sequential calls) to ~8s while keeping quit latency under a second
+- **Paginated Results** — Infinite scroll loading for browse and tag searches; broad free-text searches return a single merged page (see Known Limitations)
 - **Favourites** — Bookmark stations with atomic JSON writes and automatic corruption recovery
 - **Listening History** — Every station played and its song metadata is logged to `~/.config/lxradio/history.jsonl` (capped at 1000 entries, JSONL format). Accessible via `Tab` cycling
 - **History Replay** — Press `Enter` on any history entry to replay the station instantly without an API call
@@ -110,7 +110,7 @@ src/lxradio/
 
 | Requirement | Version | Notes |
 |-------------|---------|-------|
-| Python | ≥ 3.10 | Tested on 3.10, 3.11, 3.12, 3.13 |
+| Python | ≥ 3.10 | Tested on 3.10, 3.11, 3.12, 3.13, 3.14 |
 | mpv | Any recent | Must be available in `PATH` |
 | uv | Latest | Optional but strongly recommended |
 
