@@ -20,7 +20,7 @@ uv run ruff check src/ tests/  # lint
 uv run mypy src/              # type check
 ```
 
-All three must pass before a PR is merged. CI runs on Python 3.10–3.13 on Ubuntu.
+All three must pass before a PR is merged. CI runs on Python 3.10–3.14 on Ubuntu.
 
 ## Code style
 
