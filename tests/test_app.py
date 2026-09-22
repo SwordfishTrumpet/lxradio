@@ -195,7 +195,9 @@ class TestRadioAppLogic:
         app._cursor = 0
         app._now_playing = s
         app._player.set_volume(50)
-        with patch.object(app, "_play_selected") as mock_play:
+        with patch.object(app._player, "is_playing", return_value=True), patch.object(
+            app, "_play_selected"
+        ) as mock_play:
             result = app._handle_nav_key(10)
         assert result is False
         assert app._player.is_muted()
@@ -227,6 +229,61 @@ class TestRadioAppLogic:
         # BUG-5: play() already stopped the old stream, so a failed play must not
         # leave a stale "now playing" bar pointing at a dead player.
         assert app._now_playing is None
+
+    def test_build_draw_state_clears_ended_stream(self, app):
+        # Issue #34: once mpv exits on its own the draw state must not claim a
+        # station is playing, and the stored station/title must be cleared.
+        s = Station("1", "A", "http://a", "", [], "MP3", 0, 0)
+        app._stations = [s]
+        app._now_playing = s
+        app._song_title = "Song"
+        with patch.object(app._player, "is_playing", return_value=False):
+            state = app._build_draw_state()
+        assert state.now_playing is None
+        assert state.song_title == ""
+        assert app._now_playing is None
+        assert app._song_title == ""
+
+    def test_build_draw_state_keeps_live_stream(self, app):
+        s = Station("1", "A", "http://a", "", [], "MP3", 0, 0)
+        app._stations = [s]
+        app._now_playing = s
+        app._song_title = "Song"
+        with patch.object(app._player, "is_playing", return_value=True):
+            state = app._build_draw_state()
+        assert state.now_playing is s
+        assert state.song_title == "Song"
+
+    def test_enter_on_ended_stream_replays(self, app):
+        # Issue #34: Enter on a station whose process exited replays instead of
+        # toggling mute on a dead stream.
+        s = Station("1", "A", "http://a", "", [], "MP3", 0, 0)
+        app._stations = [s]
+        app._cursor = 0
+        app._now_playing = s
+        with patch.object(app._player, "is_playing", return_value=False), patch.object(
+            app, "_play_selected"
+        ) as mock_play:
+            app._enter()
+        mock_play.assert_called_once()
+
+    def test_tick_idle_clears_ended_stream(self, app):
+        # Issue #34: the idle tick self-corrects the UI without a keypress.
+        s = Station("1", "A", "http://a", "", [], "MP3", 0, 0)
+        app._now_playing = s
+        app._song_title = "Song"
+        with patch.object(app._player, "is_playing", return_value=False):
+            assert app._tick(-1) is False
+        assert app._now_playing is None
+        assert app._song_title == ""
+        assert app._dirty is True
+
+    def test_tick_idle_keeps_live_stream(self, app):
+        s = Station("1", "A", "http://a", "", [], "MP3", 0, 0)
+        app._now_playing = s
+        with patch.object(app._player, "is_playing", return_value=True):
+            assert app._tick(-1) is False
+        assert app._now_playing is s
 
     def test_nav_empty_list_no_crash(self, app):
         app._stations = []

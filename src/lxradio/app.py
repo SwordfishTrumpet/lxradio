@@ -161,6 +161,7 @@ class RadioApp:
             if self._loading:
                 self._spinner_i += 1
                 self._dirty = True
+            self._refresh_now_playing()
             return False
         if isinstance(key, str):
             if not key.isprintable():
@@ -175,6 +176,8 @@ class RadioApp:
 
     def _build_draw_state(self) -> DrawState:
         h, w = self._scr.getmaxyx()
+        # A stream can end on its own; stop claiming playback before drawing.
+        self._refresh_now_playing()
         # Reads of fields written by background threads (see AGENTS.md thread-safety
         # rules) are done under the lock.
         with self._lock:
@@ -267,7 +270,11 @@ class RadioApp:
         stations = self._current_stations()
         if stations and self._cursor < len(stations):
             selected = stations[self._cursor]
-            if self._now_playing and selected.id == self._now_playing.id:
+            if (
+                self._now_playing
+                and selected.id == self._now_playing.id
+                and self._player.is_playing()
+            ):
                 self._player.toggle_mute()
                 self._status_msg = "Muted" if self._player.is_muted() else "Unmuted"
             else:
@@ -284,11 +291,29 @@ class RadioApp:
     def _on_sleep_expire(self) -> None:
         self._player.stop()
         self._restore_volume_after_sleep()
+        self._clear_now_playing()
+        with self._lock:
+            self._status_msg = "Sleep timer finished"
+
+    def _clear_now_playing(self) -> None:
+        """Forget the current stream and mark the UI dirty."""
         with self._lock:
             self._now_playing = None
             self._song_title = ""
-            self._status_msg = "Sleep timer finished"
             self._dirty = True
+
+    def _refresh_now_playing(self) -> None:
+        """Clear now-playing state when mpv exited on its own (issue #34).
+
+        ``is_playing()`` is process-based, so a dropped or ended stream does
+        not clear ``_now_playing`` by itself. Called from the idle tick and
+        before every draw so the now-playing bar and the station play
+        indicator stop claiming playback within one refresh.
+        """
+        with self._lock:
+            has_now_playing = self._now_playing is not None
+        if has_now_playing and not self._player.is_playing():
+            self._clear_now_playing()
 
     def _cycle_sleep_timer(self) -> None:
         # First-snapshot-wins (issue #17): capture the restore baseline BEFORE
