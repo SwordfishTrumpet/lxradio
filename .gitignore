@@ -22,4 +22,8 @@ coverage.xml
 # Project-specific exclusions
 TODO.md
 AGENTS.md
+
+# Pipeline local runtime state (never committed)
+LEDGER.tsv
+.pipeline-discover.lock
 .DS_Store
