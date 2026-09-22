@@ -2,6 +2,24 @@
 
 All notable changes to lxradio will be documented in this file.
 
+## [0.2.2] — 2026-09-22
+
+### Fixed
+
+- The mpv IPC socket no longer lives directly in world-writable `/tmp`. It is created in a private per-user directory (`$XDG_RUNTIME_DIR/lxradio` on Linux, `$TMPDIR/lxradio` on macOS, mode 0700), so another local account cannot send commands to your player (#22).
+- Keyboard input is read through `get_wch()` with timeouts treated as idle, so the app no longer exits when the user pauses and Enter, Tab, Escape and Backspace work again (#29).
+- A valid-JSON history line that is not an object, or a non-list `tags` value, no longer crashes the HISTORY view; both are treated as corrupt entries (#33).
+- The now-playing bar and the station play indicator clear when the stream process exits on its own, instead of claiming playback forever (#34).
+- Station body text uses the terminal default foreground colour, so the list stays readable on light terminal themes (#26).
+
+### Changed
+
+- CI GitHub Actions are pinned to commit SHAs instead of mutable major version tags and bumped to their Node 24 majors (#31).
+- Branch protection on `main` now requires the CI jobs, and Dependabot vulnerability alerts are enabled (#25).
+- README and CONTRIBUTING describe the daemon-thread search, the single-page free-text results, and the Python 3.10-3.14 CI range (#23, #30).
+- Parsing-invariant test coverage is back to 100% (#28).
+- `LEDGER.tsv` and the pipeline lock file are gitignored (#27).
+
 ## [0.2.1] — 2026-08-26
 
 ### Fixed
@@ -64,5 +82,7 @@ All notable changes to lxradio will be documented in this file.
 - Click deduplication for API tracking
 - Registration-driven keybindings with auto-generated footer
 
+[0.2.2]: https://github.com/SwordfishTrumpet/lxradio/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/SwordfishTrumpet/lxradio/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/SwordfishTrumpet/lxradio/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/SwordfishTrumpet/lxradio/releases/tag/v0.1.0
