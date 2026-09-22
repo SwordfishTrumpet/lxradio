@@ -75,6 +75,18 @@ class HistoryEntry:
         )
 
 
+def _coerce_tags(value: object) -> list[str]:
+    """Return a list of tag strings, tolerating a corrupt non-list value.
+
+    A hand-edited history file can hold null, a number, or an object where tags
+    belong; ``Station.tag_str()`` joins the list, so a non-list value would
+    crash the HISTORY view at render time (issue #33).
+    """
+    if not isinstance(value, list):
+        return []
+    return [str(tag) for tag in value]
+
+
 def _entry_to_line(entry: HistoryEntry) -> str:
     data = {
         "timestamp": entry.timestamp,
@@ -166,19 +178,37 @@ class History:
 
         lines = raw.splitlines()
         entries: list[HistoryEntry] = []
-        had_content = False
+
+        def skip_last_or_reset(index: int, exc: Exception) -> bool:
+            """Skip a trailing malformed line, or back up the file and reset.
+
+            Returns True when the caller should skip this line; False means the
+            file was already reset and the loop must return.
+            """
+            if index == len(lines) - 1 and entries:
+                logger.warning("Skipping malformed last line in history file: %s", exc)
+                return True
+            # Malformed line in the middle, or first/only line invalid: treat the whole file as corrupted.
+            self._backup_and_reset(exc)
+            return False
+
         for i, line in enumerate(lines):
             if not line.strip():
                 continue
-            had_content = True
             try:
                 data = json.loads(line)
             except json.JSONDecodeError as exc:
-                if i == len(lines) - 1 and entries:
-                    logger.warning("Skipping malformed last line in history file: %s", exc)
+                if skip_last_or_reset(i, exc):
                     continue
-                # Malformed line in the middle, or first/only line invalid: treat whole file as corrupted
-                self._backup_and_reset(exc)
+                return
+            if not isinstance(data, dict):
+                # A valid JSON document that is not an object (null, true, 42,
+                # a string, an array) cannot describe an entry; treat it like
+                # a malformed line instead of crashing on data.get() (issue
+                # #33).
+                shape_exc = TypeError(f"history entry is not an object: {data!r}")
+                if skip_last_or_reset(i, shape_exc):
+                    continue
                 return
             try:
                 entry = HistoryEntry(
@@ -187,25 +217,18 @@ class History:
                     station_name=data.get("station_name", ""),
                     url=data.get("url", ""),
                     country=data.get("country", ""),
-                    tags=data.get("tags", []),
+                    tags=_coerce_tags(data.get("tags", [])),
                     codec=data.get("codec", "?"),
                     bitrate=int(data.get("bitrate", 0)),
                     votes=int(data.get("votes", 0)),
                     favicon=data.get("favicon", ""),
                     song_title=data.get("song_title", ""),
                 )
-                entries.append(entry)
-            except (KeyError, TypeError, ValueError) as exc:
-                if i == len(lines) - 1 and entries:
-                    logger.warning("Skipping malformed last line in history file: %s", exc)
+            except (AttributeError, KeyError, TypeError, ValueError) as exc:
+                if skip_last_or_reset(i, exc):
                     continue
-                self._backup_and_reset(exc)
                 return
-
-        if had_content and not entries:  # pragma: no cover - defensive; unreachable with current parsing
-            # File had non-empty lines but none were valid
-            self._backup_and_reset(json.JSONDecodeError("No valid entries", doc=raw, pos=0))
-            return
+            entries.append(entry)
 
         if len(entries) > _MAX_ENTRIES:
             entries = entries[-_MAX_ENTRIES:]

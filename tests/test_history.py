@@ -277,3 +277,62 @@ class TestHistory:
         monkeypatch.setattr("lxradio.history._CONFIG_DIR", tmp_path)
         h = History()
         assert len(h.all()) == 1000
+
+    @pytest.mark.parametrize("bad", ["null", "true", "42", '"str"', "[1, 2]"])
+    def test_load_skips_non_object_last_line(self, tmp_path, monkeypatch, bad):
+        # Issue #33: a trailing valid-JSON non-object line must be skipped like
+        # any other malformed last line, not crash History() on data.get().
+        test_file = tmp_path / "history.jsonl"
+        valid = {"timestamp": 1.0, "station_id": "1", "station_name": "A", "url": "http://a", "country": "US", "tags": [], "codec": "MP3", "bitrate": 128, "votes": 10, "favicon": "", "song_title": ""}
+        test_file.write_text(json.dumps(valid) + "\n" + bad)
+        monkeypatch.setattr("lxradio.history._HISTORY_FILE", test_file)
+        monkeypatch.setattr("lxradio.history._CONFIG_DIR", tmp_path)
+        h = History()
+        assert len(h.all()) == 1
+        assert h.all()[0].station_id == "1"
+
+    @pytest.mark.parametrize("bad", ["null", "true", "42", '"str"', "[1, 2]"])
+    def test_load_non_object_middle_line_backs_up(self, tmp_path, monkeypatch, caplog, bad):
+        test_file = tmp_path / "history.jsonl"
+        valid = {"timestamp": 1.0, "station_id": "1", "station_name": "A", "url": "http://a", "country": "US", "tags": [], "codec": "MP3", "bitrate": 128, "votes": 10, "favicon": "", "song_title": ""}
+        test_file.write_text(json.dumps(valid) + "\n" + bad + "\n" + json.dumps(valid))
+        monkeypatch.setattr("lxradio.history._HISTORY_FILE", test_file)
+        monkeypatch.setattr("lxradio.history._CONFIG_DIR", tmp_path)
+        with caplog.at_level("ERROR"):
+            h = History()
+        assert len(h.all()) == 0
+        assert (tmp_path / "history.jsonl.bak").exists()
+
+    def test_load_only_non_object_line_backs_up(self, tmp_path, monkeypatch, caplog):
+        test_file = tmp_path / "history.jsonl"
+        test_file.write_text("null")
+        monkeypatch.setattr("lxradio.history._HISTORY_FILE", test_file)
+        monkeypatch.setattr("lxradio.history._CONFIG_DIR", tmp_path)
+        with caplog.at_level("ERROR"):
+            h = History()
+        assert h.all() == []
+        assert (tmp_path / "history.jsonl.bak").exists()
+
+    @pytest.mark.parametrize("tags", [None, 5, {"a": 1}, "jazz"])
+    def test_load_non_list_tags_coerced_to_empty(self, tmp_path, monkeypatch, tags):
+        # Issue #33: a valid record whose tags is not a list must still render
+        # (to_station/tag_str) instead of raising TypeError.
+        test_file = tmp_path / "history.jsonl"
+        data = {"timestamp": 1.0, "station_id": "1", "station_name": "A", "url": "http://a", "country": "US", "tags": tags, "codec": "MP3", "bitrate": 128, "votes": 10, "favicon": "", "song_title": ""}
+        test_file.write_text(json.dumps(data))
+        monkeypatch.setattr("lxradio.history._HISTORY_FILE", test_file)
+        monkeypatch.setattr("lxradio.history._CONFIG_DIR", tmp_path)
+        h = History()
+        assert len(h.all()) == 1
+        station = h.all()[0].to_station()
+        assert station.tags == []
+        assert station.tag_str() == "—"
+
+    def test_load_list_tags_with_non_strings_are_stringified(self, tmp_path, monkeypatch):
+        test_file = tmp_path / "history.jsonl"
+        data = {"timestamp": 1.0, "station_id": "1", "station_name": "A", "url": "http://a", "country": "US", "tags": [1, None, "jazz"], "codec": "MP3", "bitrate": 128, "votes": 10, "favicon": "", "song_title": ""}
+        test_file.write_text(json.dumps(data))
+        monkeypatch.setattr("lxradio.history._HISTORY_FILE", test_file)
+        monkeypatch.setattr("lxradio.history._CONFIG_DIR", tmp_path)
+        h = History()
+        assert h.all()[0].to_station().tags == ["1", "None", "jazz"]
