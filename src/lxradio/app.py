@@ -48,6 +48,33 @@ def _friendly_error(e: Exception) -> str:
     return f"Error: {e}"
 
 
+# curses get_wch() delivers the control keys as one-character strings, not the
+# integer codes getch() used to produce. Map them back so the int-key handlers
+# and the KeyDispatcher apply (issue #29). Printable strings (including
+# non-ASCII) are left untouched.
+_CONTROL_KEY_CODES: dict[str, int] = {
+    "\n": 10,  # Enter (line feed)
+    "\r": 13,  # Enter (carriage return)
+    "\t": 9,  # Tab
+    "\x1b": 27,  # Escape
+    "\x7f": 127,  # Backspace / delete
+    "\x08": 8,  # Backspace (control-H)
+}
+
+
+def _normalize_key(key: int | str) -> int | str:
+    """Map a get_wch() result onto the key codes the handlers expect.
+
+    curses delivers Enter, Tab, Escape and Backspace as one-character strings,
+    while the handlers and the KeyDispatcher are written against integer key
+    codes. Translate only the control characters and leave printable strings
+    (which may be non-ASCII) alone.
+    """
+    if isinstance(key, str) and not key.isprintable():
+        return _CONTROL_KEY_CODES.get(key, key)
+    return key
+
+
 class View(Enum):
     BROWSE = auto()
     FAVORITES = auto()
@@ -111,12 +138,25 @@ class RadioApp:
             if self._dirty:
                 self._renderer.draw(self._build_draw_state())
                 self._dirty = False
-            key: int | str = stdscr.get_wch()
-            if self._tick(key):
+            if self._tick(self._read_key(stdscr)):
                 break
         self.shutdown()
 
+    def _read_key(self, stdscr: "curses.window") -> int | str:
+        """Read one key, treating an input timeout as idle.
+
+        Unlike getch(), curses.window.get_wch() raises curses.error when its
+        timeout elapses, so an unguarded call ends the app whenever the user
+        pauses (issue #29). A timeout is the normal idle case and maps to the
+        -1 "no key" sentinel _tick() already understands.
+        """
+        try:
+            return stdscr.get_wch()
+        except curses.error:
+            return -1
+
     def _tick(self, key: int | str) -> bool:
+        key = _normalize_key(key)
         if key == -1:
             if self._loading:
                 self._spinner_i += 1
