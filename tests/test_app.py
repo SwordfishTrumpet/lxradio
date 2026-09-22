@@ -105,6 +105,7 @@ class TestRadioAppLogic:
             mock_curses.KEY_LEFT = curses.KEY_LEFT
             mock_curses.KEY_ENTER = curses.KEY_ENTER
             mock_curses.KEY_BACKSPACE = curses.KEY_BACKSPACE
+            mock_curses.error = curses.error
             a = RadioApp()
             a._scr = MagicMock()
             a._scr.getmaxyx.return_value = (24, 80)
@@ -787,6 +788,78 @@ class TestRadioAppLogic:
             assert app._tick(curses.KEY_ENTER) is False
             assert not app._search_mode
             mock_search.assert_called_once_with("jazz", limit=28, offset=0)
+
+    def test_read_key_returns_idle_on_timeout(self, app):
+        # Issue #29: get_wch() raises on the input timeout instead of returning
+        # -1 like getch(); an idle app must treat that as "no key".
+        app._scr.get_wch.side_effect = curses.error("no input")
+        assert app._read_key(app._scr) == -1
+
+    def test_read_key_returns_raw_key(self, app):
+        app._scr.get_wch.return_value = "é"
+        assert app._read_key(app._scr) == "é"
+
+    def test_tick_enter_string_submits_search(self, app):
+        # Issue #29: a real terminal delivers Enter as the string "\n".
+        with patch("lxradio.app.search") as mock_search:
+            mock_search.return_value = []
+            app._search_mode = True
+            app._query = "jazz"
+            assert app._tick("\n") is False
+            assert not app._search_mode
+            mock_search.assert_called_once_with("jazz", limit=28, offset=0)
+
+    def test_tick_escape_string_cancels_search(self, app):
+        # Issue #29: Escape arrives as the string "\x1b", not int 27.
+        app._search_mode = True
+        app._query = "jazz"
+        assert app._tick("\x1b") is False
+        assert not app._search_mode
+        assert app._query == ""
+
+    def test_tick_tab_string_cycles_view(self, app):
+        # Issue #29: Tab arrives as the string "\t", not int 9.
+        assert app._view == View.BROWSE
+        assert app._tick("\t") is False
+        assert app._view == View.FAVORITES
+
+    def test_tick_backspace_string_edits_query(self, app):
+        # Issue #29: one Backspace encoding arrives as the string "\x7f".
+        app._search_mode = True
+        app._query = "jazz"
+        assert app._tick("\x7f") is False
+        assert app._query == "jaz"
+
+    def test_tick_carriage_return_submits_search(self, app):
+        # Issue #29: Enter also arrives as the string "\r".
+        with patch("lxradio.app.search") as mock_search:
+            mock_search.return_value = []
+            app._search_mode = True
+            app._query = "jazz"
+            assert app._tick("\r") is False
+            mock_search.assert_called_once_with("jazz", limit=28, offset=0)
+
+    def test_tick_control_h_backspace_edits_query(self, app):
+        # Issue #29: the control-H Backspace encoding arrives as "\x08".
+        app._search_mode = True
+        app._query = "jazz"
+        assert app._tick("\x08") is False
+        assert app._query == "jaz"
+
+    def test_tick_enter_string_plays_in_nav_mode(self, app):
+        # Issue #29: Enter as a string must still reach the play/mute handler.
+        s = Station("1", "A", "http://a", "", [], "MP3", 0, 0)
+        app._stations = [s]
+        app._cursor = 0
+        with patch.object(app._player, "play", return_value=True):
+            assert app._tick("\n") is False
+        assert app._now_playing is s
+
+    def test_tick_unmapped_control_string_ignored(self, app):
+        app._search_mode = True
+        app._query = "jazz"
+        assert app._tick("\x00") is False
+        assert app._query == "jazz"
 
     def test_tick_space_stops_when_playing(self, app):
         s = Station("1", "A", "http://a", "", [], "MP3", 0, 0)
