@@ -12,6 +12,8 @@ from lxradio.radio_browser import (
     Station,
     _get,
     _resolve_host,
+    _safe_int,
+    _stations_from_data,
     report_click,
     search,
     search_by_country,
@@ -117,6 +119,31 @@ class TestStation:
     def test_quality_str_no_bitrate(self):
         s = Station("1", "X", "http://x", "", [], "AAC", 0, 0)
         assert s.quality_str == "AAC"
+
+
+class TestParsingHelpers:
+    def test_safe_int_bool_is_zero(self):
+        # Issue #28: the bool guard must win over the numeric branch.
+        assert _safe_int(True) == 0
+        assert _safe_int(False) == 0
+
+    def test_safe_int_numeric_string(self):
+        assert _safe_int("128") == 128
+        assert _safe_int("") == 0
+        assert _safe_int(None) == 0
+
+    def test_stations_from_data_skips_record_that_raises(self):
+        # Issue #28: a record whose conversion raises is dropped on its own,
+        # leaving the rest of the page intact (the issue #9 invariant).
+        data = [
+            {"stationuuid": "1", "name": "Good", "url_resolved": "http://good"},
+            {"stationuuid": "2", "name": "Bad", "url_resolved": "http://bad", "tags": 5},
+        ]
+        assert [s.id for s in _stations_from_data(data)] == ["1"]
+
+    def test_stations_from_data_non_list_raises(self):
+        with pytest.raises(ValueError, match="unexpected API response"):
+            _stations_from_data({"error": "envelope"})
 
 
 class TestResolveHost:
