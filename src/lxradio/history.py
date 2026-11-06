@@ -133,20 +133,6 @@ class History:
         with self._lock:
             return list(reversed(self._entries))
 
-    def get(self, station_id: str) -> HistoryEntry | None:
-        with self._lock:
-            for entry in reversed(self._entries):
-                if entry.station_id == station_id:
-                    return entry
-            return None
-
-    def clear(self) -> None:
-        with self._lock:
-            self._entries = []
-            self._revision += 1
-            revision = self._revision
-        self._save(revision, [])
-
     def _save(self, revision: int, snapshot: list[HistoryEntry]) -> None:
         # File I/O happens on a dedicated IO lock so _lock is never held during
         # disk writes, which would otherwise block all()/get() on the UI thread

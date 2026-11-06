@@ -12,7 +12,6 @@ Usage:
     python fix_editable_install.py
 """
 import os
-import stat
 from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent

@@ -27,7 +27,7 @@ class TestFavorites:
         f = Favorites()
         s = Station("1", "A", "http://a", "US", ["jazz"], "MP3", 128, 10)
         f.add(s)
-        assert len(f) == 1
+        assert len(f.all()) == 1
         assert f.all()[0].id == "1"
         assert f.is_favorite("1")
 
@@ -36,7 +36,7 @@ class TestFavorites:
         s = Station("1", "A", "http://a", "US", ["jazz"], "MP3", 128, 10)
         f.add(s)
         f.remove("1")
-        assert len(f) == 0
+        assert len(f.all()) == 0
         assert not f.is_favorite("1")
 
     def test_toggle_adds_and_removes(self):
@@ -47,19 +47,13 @@ class TestFavorites:
         added2 = f.toggle(s)
         assert added2 is False
 
-    def test_iter(self):
-        f = Favorites()
-        s = Station("1", "A", "http://a", "US", ["jazz"], "MP3", 128, 10)
-        f.add(s)
-        assert list(f)[0].id == "1"
-
     def test_persistence(self):
         s = Station("1", "A", "http://a", "US", ["jazz"], "MP3", 128, 10, "icon")
         f1 = Favorites()
         f1.add(s)
 
         f2 = Favorites()
-        assert len(f2) == 1
+        assert len(f2.all()) == 1
         loaded = f2.all()[0]
         assert loaded.id == "1"
         assert loaded.favicon == "icon"
@@ -72,7 +66,7 @@ class TestFavorites:
 
         with caplog.at_level("ERROR"):
             f = Favorites()
-        assert len(f) == 0
+        assert len(f.all()) == 0
         assert (tmp_path / "favorites.json.bak").exists()
         assert "Corrupted favorites file" in caplog.text
 
@@ -96,7 +90,7 @@ class TestFavorites:
         monkeypatch.setattr("lxradio.favorites._FAVORITES_FILE", test_file)
         monkeypatch.setattr("lxradio.favorites._CONFIG_DIR", tmp_path)
         f = Favorites()
-        assert len(f) == 1
+        assert len(f.all()) == 1
         assert f.all()[0].id == "1"
 
     def test_valid_non_list_json_backup(self, tmp_path, monkeypatch, caplog):
@@ -106,7 +100,7 @@ class TestFavorites:
         monkeypatch.setattr("lxradio.favorites._CONFIG_DIR", tmp_path)
         with caplog.at_level("ERROR"):
             f = Favorites()
-        assert len(f) == 0
+        assert len(f.all()) == 0
         assert (tmp_path / "favorites.json.bak").exists()
         assert "Corrupted favorites file" in caplog.text
 
@@ -117,7 +111,7 @@ class TestFavorites:
         monkeypatch.setattr("lxradio.favorites._CONFIG_DIR", tmp_path)
         with caplog.at_level("ERROR"):
             f = Favorites()
-        assert len(f) == 0
+        assert len(f.all()) == 0
         assert (tmp_path / "favorites.json.bak").exists()
         assert "Corrupted favorites file" in caplog.text
 
@@ -128,7 +122,7 @@ class TestFavorites:
         monkeypatch.setattr("lxradio.favorites._CONFIG_DIR", tmp_path)
         with caplog.at_level("ERROR"):
             f = Favorites()
-        assert len(f) == 0
+        assert len(f.all()) == 0
         assert (tmp_path / "favorites.json.bak").exists()
         assert "Corrupted favorites file" in caplog.text
 
