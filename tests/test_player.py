@@ -453,7 +453,30 @@ class TestPlayer:
             ["pactl", "set-sink-volume", "@DEFAULT_SINK@", "55%"],
             check=False,
             capture_output=True,
+            timeout=2,
         )
+
+    def test_system_volume_pactl_has_a_deadline(self, monkeypatch):
+        # #39: the fallback runs on the curses main thread, so a hung pactl must be
+        # abandoned instead of freezing the UI.
+        p = Player()
+        monkeypatch.setattr("lxradio.player._IS_MACOS", False)
+        monkeypatch.setattr("lxradio.player._has_pactl", lambda: True)
+        p._ipc_socket = "/nonexistent/lxradio-mpv.sock"
+        with patch("subprocess.run") as mock_run:
+            p._system_volume(55)
+        timeout = mock_run.call_args.kwargs["timeout"]
+        assert isinstance(timeout, (int, float))
+        assert 0 < timeout <= 5
+
+    def test_system_volume_pactl_timeout_does_not_propagate(self, monkeypatch):
+        p = Player()
+        monkeypatch.setattr("lxradio.player._IS_MACOS", False)
+        monkeypatch.setattr("lxradio.player._has_pactl", lambda: True)
+        p._ipc_socket = "/nonexistent/lxradio-mpv.sock"
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("pactl", 2)):
+            p.set_volume(42)  # must return, not raise
+        assert p.get_volume() == 42
 
     def test_is_playing_process_alive_ignores_silent_stream(self):
         # BUG-1: liveness is process-based. A stream that sends no metadata must

@@ -38,6 +38,9 @@ def _reset_pactl_cache() -> None:
 # AF_UNIX sun_path limit is 108 bytes on Linux and 104 on macOS/BSD; stay under both.
 _SUN_PATH_MAX = 104
 
+# Seconds to wait for `pactl` before abandoning a fallback volume change.
+_PACTL_TIMEOUT = 2
+
 
 def _ipc_socket_path() -> str | None:
     """Return a private path for the mpv IPC socket, or None if none fits.
@@ -199,11 +202,14 @@ class Player:
             return
         if self._mpv_ipc_set_volume(vol):
             return
-        with contextlib.suppress(FileNotFoundError):
+        # A wedged PulseAudio client must not freeze the curses main thread, which
+        # is where this runs: give the call a deadline and move on (#39).
+        with contextlib.suppress(FileNotFoundError, subprocess.TimeoutExpired):
             subprocess.run(
                 ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{vol}%"],
                 check=False,
                 capture_output=True,
+                timeout=_PACTL_TIMEOUT,
             )
 
     def _mpv_ipc_set_volume(self, vol: int) -> bool:
