@@ -1,0 +1,8 @@
+# issue	command	expected-exit	area
+35	grep -q "Releasing and rolling back" CONTRIBUTING.md	0	reliability
+36	grep -q "contents: read" .github/workflows/ci.yml	0	supply-chain
+37	grep -q "cancel-in-progress: true" .github/workflows/ci.yml	0	cost
+38	grep -q "requires-python = \">=3.11\"" pyproject.toml	0	dependency
+39	uv run pytest tests/test_player.py -k pactl_timeout -q	0	reliability
+40	grep -q "default-days: 7" .github/dependabot.yml	0	supply-chain
+42	git check-ignore -q .pipeline/probes/answers.tsv	0	privacy

@@ -2,6 +2,22 @@
 
 All notable changes to lxradio will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- Python 3.10 is no longer supported: 3.10 reached end of life on 2026-10-31, so the package now
+  requires 3.11 or newer and CI tests 3.11-3.14 (#38).
+- CI declares a read-only token scope, cancels superseded runs and caps each job's runtime (#36, #37).
+- Dependabot only proposes a version that has been published for at least seven days (#40).
+- CONTRIBUTING.md documents how to release and how to withdraw or supersede a bad release (#35).
+- The pipeline's local probe evidence and gate records are gitignored (#42).
+
+### Fixed
+
+- A hung `pactl` call can no longer freeze the interface: the PulseAudio volume fallback now has a
+  two second deadline (#39).
+
 ## [0.2.2] — 2026-09-22
 
 ### Fixed
