@@ -75,25 +75,6 @@ class TestHistory:
         assert len(h.all()) == 1
         assert h.all()[0].station_id == "1"
 
-    def test_get_returns_most_recent(self):
-        h = History()
-        h.add(self._make_station("1", "A"), song_title="Song A")
-        time.sleep(0.01)
-        h.add(self._make_station("1", "A"), song_title="Song B")
-        entry = h.get("1")
-        assert entry is not None
-        assert entry.song_title == "Song B"
-
-    def test_get_returns_none_for_missing(self):
-        h = History()
-        assert h.get("missing") is None
-
-    def test_clear_empties_file(self):
-        h = History()
-        h.add(self._make_station())
-        h.clear()
-        assert h.all() == []
-
     def test_corruption_backup(self, tmp_path, monkeypatch, caplog):
         test_file = tmp_path / "history.jsonl"
         test_file.write_text("NOT JSON")

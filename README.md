@@ -15,7 +15,7 @@
     <img src="https://img.shields.io/github/license/SwordfishTrumpet/lxradio" alt="License">
   </a>
   <a href="https://www.python.org/downloads/">
-    <img src="https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue" alt="Python Versions">
+    <img src="https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue" alt="Python Versions">
   </a>
   <a href="https://github.com/astral-sh/ruff">
     <img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="Ruff">
@@ -78,7 +78,7 @@ A minimal, fast terminal TUI radio player. Browse and search thousands of intern
 
 | Component | Technology | Purpose |
 |-----------|-----------|---------|
-| **Language** | Python ≥ 3.10 (tested up to 3.14) | Core application logic |
+| **Language** | Python ≥ 3.11 (tested up to 3.14) | Core application logic |
 | **UI Framework** | `curses` (stdlib) | Terminal user interface |
 | **Audio Engine** | `mpv` (external binary) | Stream playback and metadata extraction |
 | **Data Source** | [radio-browser.info API](https://www.radio-browser.info/) | Station directory and search |
@@ -110,7 +110,7 @@ src/lxradio/
 
 | Requirement | Version | Notes |
 |-------------|---------|-------|
-| Python | ≥ 3.10 | Tested on 3.10, 3.11, 3.12, 3.13, 3.14 |
+| Python | ≥ 3.11 | Tested on 3.11, 3.12, 3.13, 3.14 |
 | mpv | Any recent | Must be available in `PATH` |
 | uv | Latest | Optional but strongly recommended |
 
