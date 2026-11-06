@@ -26,4 +26,9 @@ AGENTS.md
 # Pipeline local runtime state (never committed)
 LEDGER.tsv
 .pipeline-discover.lock
+# Probe evidence and the gate records are written per run; the check registry
+# (.pipeline/verify.tsv) stays trackable.
+.pipeline/probes/
+.pipeline/evidence
+.pipeline/last-gate
 .DS_Store
