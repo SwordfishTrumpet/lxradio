@@ -1,11 +1,17 @@
 version: 2
 updates:
+  # Only propose a version that has been public for a week, so a compromised or
+  # yanked release is not pulled in before anyone notices (#40).
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "monthly"
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "monthly"
+    cooldown:
+      default-days: 7
