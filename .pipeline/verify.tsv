@@ -6,3 +6,4 @@
 39	uv run pytest tests/test_player.py -k pactl_timeout -q	0	reliability
 40	grep -q "default-days: 7" .github/dependabot.yml	0	supply-chain
 42	git check-ignore -q .pipeline/probes/answers.tsv	0	privacy
+41	test -z "$(git grep -lE 'def (get|clear)\(|def __iter__|^import stat$' -- src/lxradio/history.py src/lxradio/favorites.py fix_editable_install.py)"	0	dead-code

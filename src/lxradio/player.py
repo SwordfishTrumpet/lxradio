@@ -239,6 +239,13 @@ class Player:
 
     @property
     def current_title(self) -> str:
+        """Title the metadata stream last announced.
+
+        The app receives titles through ``on_metadata``, so nothing in ``app.py`` reads
+        this. It stays because it is the only read access to the stream title: the player
+        tests observe the metadata path through it, and deleting it would send them at the
+        private attribute instead.
+        """
         return self._current_title
 
     def _read_output(self) -> None:
