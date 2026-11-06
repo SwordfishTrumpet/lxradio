@@ -3,7 +3,6 @@ import json
 import logging
 import os
 import shutil
-from collections.abc import Iterator
 
 from . import _CONFIG_DIR
 from .radio_browser import Station
@@ -38,12 +37,6 @@ class Favorites:
 
     def all(self) -> list[Station]:
         return list(self._stations.values())
-
-    def __len__(self) -> int:
-        return len(self._stations)
-
-    def __iter__(self) -> Iterator[Station]:
-        return iter(self._stations.values())
 
     def _save(self) -> None:
         _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
