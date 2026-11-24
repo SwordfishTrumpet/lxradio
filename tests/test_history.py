@@ -317,3 +317,28 @@ class TestHistory:
         monkeypatch.setattr("lxradio.history._CONFIG_DIR", tmp_path)
         h = History()
         assert h.all()[0].to_station().tags == ["1", "None", "jazz"]
+
+    def test_uuid_less_stations_do_not_collapse_in_history(self):
+        from lxradio.radio_browser import Station as StationAPI
+        h = History()
+        h.add(StationAPI.from_api({"name": "Alpha FM", "url": "http://a/stream"}))
+        h.add(StationAPI.from_api({"name": "Beta Radio", "url": "http://b/stream"}))
+        assert [e.station_name for e in h.all()] == ["Beta Radio", "Alpha FM"]
+
+    def test_load_migrates_empty_saved_ids_using_the_url(self, tmp_path):
+        path = tmp_path / "history.jsonl"
+        path.write_text(
+            "\n".join([
+                json.dumps({"timestamp": 1, "station_id": "", "station_name": "Alpha FM", "url": "http://a/stream", "country": "", "tags": [], "codec": "?", "bitrate": 0, "votes": 0, "favicon": "", "song_title": ""}),
+                json.dumps({"timestamp": 2, "station_id": "", "station_name": "Beta Radio", "url": "http://b/stream", "country": "", "tags": [], "codec": "?", "bitrate": 0, "votes": 0, "favicon": "", "song_title": ""}),
+                json.dumps({"timestamp": 3, "station_id": "abc-123", "station_name": "Known", "url": "http://c/stream", "country": "", "tags": [], "codec": "?", "bitrate": 0, "votes": 0, "favicon": "", "song_title": ""}),
+            ]) + "\n"
+        )
+        h = History()
+        by_id = {e.station_id: e.station_name for e in h.all()}
+        assert by_id == {
+            "url:http://b/stream": "Beta Radio",
+            "url:http://a/stream": "Alpha FM",
+            "abc-123": "Known",
+        }
+

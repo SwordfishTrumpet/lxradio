@@ -14,12 +14,14 @@ from lxradio.radio_browser import (
     _resolve_host,
     _safe_int,
     _stations_from_data,
+    fallback_station_id,
     report_click,
     search,
     search_by_country,
     search_by_name,
     search_by_tag,
     search_by_tags,
+    station_id_for,
     top_stations,
 )
 
@@ -71,6 +73,24 @@ class TestStation:
         assert s.bitrate == 0
         assert s.votes == 0
         assert s.tags == []
+        assert s.id == "url:http://x"
+        assert s.url == "http://x"
+
+    def test_from_api_blank_uuid_gets_stable_url_fallback(self):
+        a = Station.from_api({"name": "Alpha FM", "url": "http://a/stream"})
+        b = Station.from_api({"name": "Beta Radio", "url": "http://b/stream"})
+        c = Station.from_api({"name": "Alpha again", "url": "http://a/stream"})
+        assert a.id == fallback_station_id("http://a/stream") == "url:http://a/stream"
+        assert b.id == "url:http://b/stream"
+        assert a.id != b.id
+        assert a.id == c.id
+
+    def test_from_api_keeps_real_stationuuid(self):
+        s = Station.from_api({"stationuuid": "abc-123", "name": "A", "url": "http://a"})
+        assert s.id == "abc-123"
+        assert station_id_for("abc-123", "http://other") == "abc-123"
+        assert station_id_for("  ", "http://a") == "url:http://a"
+        assert station_id_for("", "") == ""
 
     def test_from_api_non_numeric_bitrate(self):
         # Issue #9: community data may deliver bitrate as a non-numeric string.
@@ -131,6 +151,20 @@ class TestParsingHelpers:
         assert _safe_int("128") == 128
         assert _safe_int("") == 0
         assert _safe_int(None) == 0
+
+    def test_stations_from_data_uuid_less_records_stay_distinct(self):
+        # Issue #61: missing stationuuid must not collapse distinct playable
+        # stations onto the empty id.
+        page = _stations_from_data([
+            {"name": "Alpha FM", "url": "http://a/stream"},
+            {"name": "Beta Radio", "url": "http://b/stream"},
+            {"stationuuid": "abc-123", "name": "Known", "url": "http://c/stream"},
+        ])
+        assert [s.name for s in page] == ["Alpha FM", "Beta Radio", "Known"]
+        assert page[0].id == "url:http://a/stream"
+        assert page[1].id == "url:http://b/stream"
+        assert page[2].id == "abc-123"
+        assert len({s.id for s in page}) == 3
 
     def test_stations_from_data_skips_record_that_raises(self):
         # Issue #28: a record whose conversion raises is dropped on its own,

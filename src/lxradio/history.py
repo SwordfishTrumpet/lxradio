@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass
 
 from . import _CONFIG_DIR
-from .radio_browser import Station
+from .radio_browser import Station, station_id_for
 
 logger = logging.getLogger(__name__)
 
@@ -197,11 +197,14 @@ class History:
                     continue
                 return
             try:
+                url = data.get("url", "") or ""
+                if not isinstance(url, str):
+                    url = str(url)
                 entry = HistoryEntry(
                     timestamp=float(data.get("timestamp", 0)),
-                    station_id=data.get("station_id", ""),
+                    station_id=station_id_for(data.get("station_id", ""), url),
                     station_name=data.get("station_name", ""),
-                    url=data.get("url", ""),
+                    url=url,
                     country=data.get("country", ""),
                     tags=_coerce_tags(data.get("tags", [])),
                     codec=data.get("codec", "?"),

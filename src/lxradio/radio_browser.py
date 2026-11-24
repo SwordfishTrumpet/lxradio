@@ -35,7 +35,10 @@ class Station:
             # Some community entries deliver tags as a JSON list instead of a string.
             tags = [str(t).strip() for t in raw_tags if t and str(t).strip()]
         return cls(
-            id=data.get("stationuuid", ""),
+            id=station_id_for(
+                data.get("stationuuid"),
+                data.get("url_resolved") or data.get("url", "") or "",
+            ),
             name=(data.get("name") or "Unknown").strip(),
             url=data.get("url_resolved") or data.get("url", ""),
             country=(data.get("country") or "").strip(),
@@ -55,6 +58,26 @@ class Station:
         if self.bitrate:
             return f"{self.codec} {self.bitrate}k"
         return self.codec
+
+
+def fallback_station_id(url: str) -> str:
+    """Stable id for a playable station that arrived without a stationuuid.
+
+    Radio Browser uuids are used as-is when present. When they are missing,
+    the stream URL is unique enough to tell stations apart and is stable
+    across pages and restarts. The ``url:`` prefix keeps these ids from
+    colliding with a later real uuid.
+    """
+    return f"url:{url}"
+
+
+def station_id_for(stationuuid: object, url: str) -> str:
+    """Prefer a non-empty stationuuid; otherwise a deterministic URL fallback."""
+    if isinstance(stationuuid, str) and stationuuid.strip():
+        return stationuuid.strip()
+    if url:
+        return fallback_station_id(url)
+    return ""
 
 
 _FALLBACK_HOSTS = [

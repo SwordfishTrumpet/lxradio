@@ -138,3 +138,37 @@ class TestFavorites:
         ), caplog.at_level("ERROR"):
             f.add(s)
         assert "Failed to save favorites file" in caplog.text
+
+
+    def test_uuid_less_stations_do_not_overwrite_each_other(self):
+        from lxradio.radio_browser import Station as StationAPI
+        f = Favorites()
+        alpha = StationAPI.from_api({"name": "Alpha FM", "url": "http://a/stream"})
+        beta = StationAPI.from_api({"name": "Beta Radio", "url": "http://b/stream"})
+        f.add(alpha)
+        f.add(beta)
+        assert [s.name for s in f.all()] == ["Alpha FM", "Beta Radio"]
+        # Reloading the file keeps both, with the same stable ids.
+        again = Favorites()
+        assert {s.id: s.name for s in again.all()} == {
+            "url:http://a/stream": "Alpha FM",
+            "url:http://b/stream": "Beta Radio",
+        }
+
+    def test_load_migrates_empty_saved_ids_using_the_url(self, tmp_path):
+        # A favourite persisted before the fix used id "". Reloading must not
+        # drop it, and two such rows must not collapse into one.
+        path = tmp_path / "favorites.json"
+        path.write_text(
+            json.dumps([
+                {"id": "", "name": "Alpha FM", "url": "http://a/stream", "country": "", "tags": [], "codec": "?", "bitrate": 0, "votes": 0, "favicon": ""},
+                {"id": "", "name": "Beta Radio", "url": "http://b/stream", "country": "", "tags": [], "codec": "?", "bitrate": 0, "votes": 0, "favicon": ""},
+                {"id": "abc-123", "name": "Known", "url": "http://c/stream", "country": "", "tags": [], "codec": "?", "bitrate": 0, "votes": 0, "favicon": ""},
+            ])
+        )
+        f = Favorites()
+        assert {s.id: s.name for s in f.all()} == {
+            "url:http://a/stream": "Alpha FM",
+            "url:http://b/stream": "Beta Radio",
+            "abc-123": "Known",
+        }

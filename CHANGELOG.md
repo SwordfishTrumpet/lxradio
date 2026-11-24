@@ -2,6 +2,12 @@
 
 All notable changes to lxradio will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- Stations delivered without a `stationuuid` now get a stable id derived from their stream URL, so two url-only stations no longer share the empty id, overwrite each other in favourites, or collapse in history. Favourites and history saved with an empty id are remapped from their URL on load and existing uuid-backed rows are left unchanged (#61).
+
 ## [0.3.0] - 2026-11-06
 
 - Remove the helpers and the import that only tests reached (#41)

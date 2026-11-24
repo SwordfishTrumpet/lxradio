@@ -5,7 +5,7 @@ import os
 import shutil
 
 from . import _CONFIG_DIR
-from .radio_browser import Station
+from .radio_browser import Station, station_id_for
 
 logger = logging.getLogger(__name__)
 
@@ -71,10 +71,12 @@ class Favorites:
                 raise TypeError(f"Expected a list, got {type(data).__name__}")
             for item in data:
                 try:
+                    saved_id = item["id"]
+                    url = item["url"]
                     s = Station(
-                        id=item["id"],
+                        id=station_id_for(saved_id, url),
                         name=item["name"],
-                        url=item["url"],
+                        url=url,
                         country=item.get("country", ""),
                         tags=item.get("tags", []),
                         codec=item.get("codec", "?"),
